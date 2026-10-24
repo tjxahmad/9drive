@@ -33,8 +33,8 @@ const RECENT_UPLOAD_MS = 15 * 60 * 1000
 // Bytes that use (or will soon use) space but may not show in an account's quota yet, per account: uploads in
 // progress (S3/R2 parts are already billed storage) and uploads finished in the last 15 minutes (Google updates its
 // storage numbers with a delay). Reserving them keeps back-to-back uploads spread across accounts.
-// S3/R2 uploads abandoned for 24 hours are aborted.
-async function pendingUploadBytes(userId: string) {
+// S3/R2 uploads abandoned for 24 hours are aborted. includeRecentGoogle: false leaves out the finished Google uploads.
+async function pendingUploadBytes(userId: string, includeRecentGoogle = true) {
   const staleBefore = new Date(Date.now() - STALE_UPLOAD_MS)
   const sessions = await prisma.uploadSession.findMany({
     where: {
@@ -43,7 +43,7 @@ async function pendingUploadBytes(userId: string) {
         { status: 'uploading', createdAt: { gt: staleBefore } },
         { status: 'uploading', s3UploadId: { not: null } },
         // Only Google lags; S3/R2 usage is re-read right after each upload, so counting these again would double them.
-        { status: 'completed', completedAt: { gt: new Date(Date.now() - RECENT_UPLOAD_MS) }, targetConnectedAccount: { is: { provider: 'google_drive' } } },
+        ...(includeRecentGoogle ? [{ status: 'completed', completedAt: { gt: new Date(Date.now() - RECENT_UPLOAD_MS) }, targetConnectedAccount: { is: { provider: 'google_drive' } } }] : []),
       ],
     },
   })
@@ -375,7 +375,11 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
     const folderId = body.folderId || null
     const folderRecord = folderId ? await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } }) : null
 
+    // Finished Google uploads are reserved only to spread files while Google's numbers catch up. When nothing fits with
+    // them (accounts nearly full), Google may already count those files, so check again without them; Google itself
+    // refuses the session below if the file really does not fit.
     const account = await selectAccount(req.user!.id, sizeBytes, await pendingUploadBytes(req.user!.id), body.targetAccountId)
+      ?? await selectAccount(req.user!.id, sizeBytes, await pendingUploadBytes(req.user!.id, false), body.targetAccountId)
     if (!account) return res.status(400).json({ code: 'NO_ACCOUNT_WITH_ENOUGH_SPACE', message: 'No connected storage account has enough space.' })
 
     if (account.provider === 's3') {
