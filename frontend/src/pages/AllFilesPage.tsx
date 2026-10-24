@@ -34,6 +34,8 @@ const sizeActiveClasses: Record<FolderSizeScale, string> = {
 }
 
 type FileViewMode = 'list' | 'grid'
+type DuplicateName = { name: string; location: string }
+type DuplicatePrompt = { files: File[]; duplicates: DuplicateName[]; targetFolderId: string | null; targetAccountId: string | null }
 
 const fileViewStorageKey = '9drive:all-files-view-mode'
 
@@ -95,6 +97,7 @@ export function AllFilesPage() {
   const [folders, setFolders] = useState<FolderItem[]>([])
   const [allFolders, setAllFolders] = useState<FolderItem[]>([])
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicatePrompt | null>(null)
   const [selectedFolderId, setSelectedFolderId] = useState('')
   const [isUploadDragging, setIsUploadDragging] = useState(false)
   const [folderName, setFolderName] = useState('')
@@ -115,7 +118,7 @@ export function AllFilesPage() {
   const [loading, setLoading] = useState(false)
   const [syncingDrive, setSyncingDrive] = useState(false)
   const [fileViewMode, setFileViewMode] = useState<FileViewMode>(getStoredFileViewMode)
-  const { uploadFiles } = useUpload()
+  const { uploadFiles, uploadProgress } = useUpload()
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('viewer')
@@ -285,13 +288,49 @@ export function AllFilesPage() {
     setSelectedTargetAccountId('')
     setUploadOpen(false)
 
-    try {
-      await uploadFiles(uploadingFiles, targetFolderId, targetAccountId)
-    } catch (err) {
-      console.error('Upload initiation failed:', err)
-    } finally {
+    // Ask before uploading files whose name already exists in 9Drive (or is uploading right now).
+    const duplicates = await findDuplicateNames(uploadingFiles)
+    if (duplicates.length > 0) {
+      setDuplicatePrompt({ files: uploadingFiles, duplicates, targetFolderId: targetFolderId || null, targetAccountId })
       setLoading(false)
+      return
     }
+    await startUpload(uploadingFiles, targetFolderId || null, targetAccountId)
+  }
+
+  // Uploads run in the background (progress panel), so more files can be added while a big upload is running.
+  async function startUpload(files: File[], targetFolderId: string | null, targetAccountId: string | null) {
+    if (files.length === 0) return
+    setLoading(false)
+    uploadFiles(files, targetFolderId, targetAccountId).catch((err) => console.error('Upload initiation failed:', err))
+  }
+
+  async function findDuplicateNames(files: File[]): Promise<DuplicateName[]> {
+    const existing = new Map<string, string>()
+    try {
+      const data = await apiFetch<{ files: Array<{ name: string; folder?: { name: string } | null }> }>('/files')
+      for (const file of data.files) existing.set(file.name.toLowerCase(), file.folder?.name ? `in folder "${file.folder.name}"` : 'in All Files')
+    } catch {
+      // If the list can't be loaded, upload without the check rather than blocking.
+    }
+    for (const file of uploadProgress.files) {
+      if (file.status === 'uploading' || file.status === 'waiting') existing.set(file.name.toLowerCase(), 'uploading right now')
+    }
+    return files.filter((file) => existing.has(file.name.toLowerCase())).map((file) => ({ name: file.name, location: existing.get(file.name.toLowerCase()) ?? '' }))
+  }
+
+  function answerDuplicatePrompt(choice: 'all' | 'skip' | 'cancel') {
+    const prompt = duplicatePrompt
+    setDuplicatePrompt(null)
+    if (!prompt || choice === 'cancel') return
+    const duplicateNames = new Set(prompt.duplicates.map((duplicate) => duplicate.name))
+    const files = choice === 'all' ? prompt.files : prompt.files.filter((file) => !duplicateNames.has(file.name))
+    if (files.length === 0) {
+      setMessage('Nothing uploaded: all selected files already exist.')
+      setTimeout(() => setMessage(''), 2500)
+      return
+    }
+    startUpload(files, prompt.targetFolderId, prompt.targetAccountId).catch(() => undefined)
   }
 
 
@@ -762,6 +801,23 @@ export function AllFilesPage() {
       </DummyModal>
       <DummyModal open={renameOpen} title="Rename File" description={activeFile?.name ?? ''} onClose={() => setRenameOpen(false)}><form onSubmit={renameFile} className="grid gap-4"><Input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} required /><div className="flex justify-end gap-3"><Button type="button" variant="outline" onClick={() => setRenameOpen(false)}>Cancel</Button><Button>Rename</Button></div></form></DummyModal>
       <DummyModal open={moveOpen} title="Move to Folder" description={selectedFileIds.size > 0 ? `Move ${selectedFileIds.size} files` : activeFile?.name ?? ''} onClose={() => setMoveOpen(false)}><form onSubmit={moveFile} className="grid gap-4"><select className="h-11 rounded-xl border border-slate-200 px-3 text-sm" value={selectedFolderId} onChange={(event) => setSelectedFolderId(event.target.value)}><option value="">No folder</option>{allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select><div className="flex justify-end gap-3"><Button type="button" variant="outline" onClick={() => setMoveOpen(false)}>Cancel</Button><Button>Move</Button></div></form></DummyModal>
+      <DummyModal open={Boolean(duplicatePrompt)} title="Files with the same name already exist" description={duplicatePrompt ? `${duplicatePrompt.duplicates.length} of ${duplicatePrompt.files.length} selected file${duplicatePrompt.files.length === 1 ? '' : 's'} already ${duplicatePrompt.duplicates.length === 1 ? 'exists' : 'exist'}. Do you still want to upload ${duplicatePrompt.duplicates.length === 1 ? 'it' : 'them'}?` : ''} onClose={() => answerDuplicatePrompt('cancel')}>
+        <div className="grid gap-4">
+          <ul className="grid max-h-56 gap-1.5 overflow-y-auto rounded-xl bg-slate-50 p-3 text-sm">
+            {duplicatePrompt?.duplicates.map((duplicate, index) => (
+              <li key={`${duplicate.name}-${index}`} className="flex min-w-0 items-center justify-between gap-3">
+                <span className="min-w-0 truncate font-semibold" title={duplicate.name}>{duplicate.name}</span>
+                <span className="shrink-0 text-xs text-slate-500">{duplicate.location}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="grid gap-2 sm:flex sm:justify-end">
+            <Button variant="outline" onClick={() => answerDuplicatePrompt('cancel')}>Cancel</Button>
+            {duplicatePrompt && duplicatePrompt.duplicates.length < duplicatePrompt.files.length ? <Button variant="outline" onClick={() => answerDuplicatePrompt('skip')}>Skip duplicates</Button> : null}
+            <Button onClick={() => answerDuplicatePrompt('all')}>Upload anyway</Button>
+          </div>
+        </div>
+      </DummyModal>
       <DummyModal open={deleteOpen} title={selectedFileIds.size > 0 ? 'Delete Files' : 'Delete File'} description={selectedFileIds.size > 0 ? `Delete ${selectedFileIds.size} files from Google Drive?` : `Delete ${activeFile?.name ?? 'file'} from Google Drive?`} onClose={() => setDeleteOpen(false)}><div className="flex justify-end gap-3"><Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="danger" onClick={deleteFile}>Delete</Button></div></DummyModal>
       <DummyModal open={folderRenameOpen} title="Rename Folder" description={activeFolderForMenu?.name ?? ''} onClose={() => setFolderRenameOpen(false)}><form onSubmit={renameFolder} className="grid gap-4"><Input value={folderRenameValue} onChange={(event) => setFolderRenameValue(event.target.value)} required /><FolderAppearanceFields color={folderRenameColor} iconUrl={folderRenameIconUrl} onColorChange={setFolderRenameColor} onIconChange={setFolderRenameIconUrl} /><div className="flex justify-end gap-3"><Button type="button" variant="outline" onClick={() => setFolderRenameOpen(false)}>Cancel</Button><Button>Rename</Button></div></form></DummyModal>
       <DummyModal open={folderDeleteOpen} title="Delete Folder" description={`Delete virtual folder ${activeFolderForMenu?.name ?? ''}? Files inside will move to the Recycle Bin.`} onClose={() => setFolderDeleteOpen(false)}><div className="flex justify-end gap-3"><Button variant="outline" onClick={() => setFolderDeleteOpen(false)}>Cancel</Button><Button variant="danger" onClick={deleteFolder}>Delete</Button></div></DummyModal>

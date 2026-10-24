@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from 'react'
+import { createContext, useContext, useRef, useState, type ReactNode } from 'react'
 import { API_URL, apiFetch, refreshAccessToken } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
 
@@ -93,6 +93,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   })
   const [resumableSessions, setResumableSessions] = useState<Record<string, ResumableSession>>({})
   const [unfinishedUploads, setUnfinishedUploads] = useState<string[]>(() => [...new Set(Object.values(readPendingUploads()).map((upload) => upload.fileName))])
+  // A new batch started while another is still uploading is appended to the panel instead of replacing it.
+  const activeBatchesRef = useRef(0)
+  const panelFileCountRef = useRef(0)
 
   function setFileState(index: number, update: Partial<UploadProgressFile>) {
     setUploadProgress((current) => {
@@ -167,33 +170,39 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   async function uploadFiles(filesToUpload: File[], targetFolderId: string | null, targetAccountId?: string | null) {
     if (filesToUpload.length === 0) return
 
-    setUploadProgress({
-      open: true,
-      fileName: filesToUpload.length === 1 ? filesToUpload[0].name : `${filesToUpload.length} files`,
-      percent: 0,
-      status: 'uploading',
-      files: filesToUpload.map(f => ({ name: f.name, size: f.size, percent: 0, status: 'uploading' }))
-    })
+    const newEntries: UploadProgressFile[] = filesToUpload.map(f => ({ name: f.name, size: f.size, percent: 0, status: 'uploading' }))
+    const appending = activeBatchesRef.current > 0
+    const offset = appending ? panelFileCountRef.current : 0
+    panelFileCountRef.current = offset + newEntries.length
+    activeBatchesRef.current += 1
+    setUploadProgress((current) => appending
+      ? { ...current, open: true, status: 'uploading', fileName: `${current.files.length + newEntries.length} files`, files: [...current.files, ...newEntries] }
+      : { open: true, fileName: filesToUpload.length === 1 ? filesToUpload[0].name : `${filesToUpload.length} files`, percent: 0, status: 'uploading', files: newEntries })
 
     // Upload files sequentially
-    let anyFailed = false
-    for (let i = 0; i < filesToUpload.length; i++) {
-      const file = filesToUpload[i]
-      try {
-        await uploadSingleFileResumable(
-          file,
-          targetFolderId,
-          (filePercent) => setFileState(i, { percent: filePercent, status: filePercent >= 100 ? 'done' : 'uploading' }),
-          (waiting) => setFileState(i, { status: waiting ? 'waiting' : 'uploading' }),
-          targetAccountId,
-        )
-      } catch (err) {
-        anyFailed = true
-        console.error('File upload failed:', file.name, err)
-        setFileState(i, { status: 'error' })
+    try {
+      for (let i = 0; i < filesToUpload.length; i++) {
+        const file = filesToUpload[i]
+        const index = offset + i
+        try {
+          await uploadSingleFileResumable(
+            file,
+            targetFolderId,
+            (filePercent) => setFileState(index, { percent: filePercent, status: filePercent >= 100 ? 'done' : 'uploading' }),
+            (waiting) => setFileState(index, { status: waiting ? 'waiting' : 'uploading' }),
+            targetAccountId,
+          )
+        } catch (err) {
+          console.error('File upload failed:', file.name, err)
+          setFileState(index, { status: 'error' })
+        }
       }
+    } finally {
+      activeBatchesRef.current -= 1
     }
-    setUploadProgress((current) => ({ ...current, status: anyFailed ? 'partial' : 'done' }))
+    if (activeBatchesRef.current === 0) {
+      setUploadProgress((current) => ({ ...current, status: current.files.some((f) => f.status === 'error') ? 'partial' : 'done' }))
+    }
 
     // Dispatch global events so active pages reload their data
     window.dispatchEvent(new Event('9drive:storage-changed'))
