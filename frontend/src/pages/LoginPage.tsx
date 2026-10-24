@@ -7,9 +7,12 @@ import { GoogleLogo } from '@/components/auth/GoogleLogo'
 import { Input } from '@/components/ui/input'
 import { apiFetch } from '@/lib/api'
 import { setAuthSession, type AuthUser } from '@/lib/auth'
-import loginWallpaper from '@/assets/login-wallpaper.jpg'
 
 type AuthResponse = { accessToken: string; refreshToken: string; user: AuthUser }
+
+// Optional personal wallpaper: put an image at src/assets/login-wallpaper.(jpg|jpeg|png|webp) (git-ignored).
+// Without one, the login page uses a dark crimson gradient.
+const loginWallpaper = Object.values(import.meta.glob<string>('../assets/login-wallpaper.{jpg,jpeg,png,webp}', { eager: true, query: '?url', import: 'default' }))[0]
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -49,7 +52,7 @@ export function LoginPage() {
   return (
     <main className="auth-crimson relative flex min-h-dvh items-center justify-center overflow-hidden p-5 lg:justify-end lg:px-[8vw]">
       {/* Wallpaper sits on its own layer: global CSS forces <main> backgrounds to transparent. */}
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[#0b0405] bg-cover bg-[position:center_top]" style={{ backgroundImage: `url(${loginWallpaper})` }} />
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[#0b0405] bg-[radial-gradient(ellipse_at_top,#7f1d1d_0%,#0b0405_65%)] bg-cover bg-[position:center_top]" style={loginWallpaper ? { backgroundImage: `url(${loginWallpaper})` } : undefined} />
       {/* Darkens the wallpaper behind the form so text stays readable (WCAG AA contrast). */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom,rgba(11,4,5,0.35),rgba(11,4,5,0.8))] lg:bg-[linear-gradient(to_right,rgba(11,4,5,0.1)_30%,rgba(11,4,5,0.85)_75%)]" />
       <Card className="relative w-full max-w-md rounded-2xl border-white/10 bg-[rgba(18,6,8,0.62)] p-6 shadow-[0_24px_80px_rgba(127,29,29,0.45)] backdrop-blur-xl">
