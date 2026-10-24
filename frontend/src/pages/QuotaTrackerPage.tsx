@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 
 type StorageSummary = { totalBytes: string; usedBytes: string; availableBytes: string }
 type ConnectedAccount = { id: string; email: string; displayName?: string | null; provider: string; status: string; storageAccount?: { totalBytes: string | null; usedBytes: string; availableBytes: string | null; lastSyncedAt: string | null } | null }
-type RoutingMode = 'most_available' | 'round_robin' | 'priority'
+type RoutingMode = 'balanced' | 'most_available' | 'round_robin' | 'priority'
 type RoutingPolicy = { mode: RoutingMode; priorityAccountIds: string[]; roundRobinCursor: number }
 
 function providerLabel(provider: string) {
@@ -46,7 +46,7 @@ function statusColor(percent: number) {
 export function QuotaTrackerPage() {
   const [summary, setSummary] = useState<StorageSummary | null>(null)
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
-  const [routingPolicy, setRoutingPolicy] = useState<RoutingPolicy>({ mode: 'most_available', priorityAccountIds: [], roundRobinCursor: 0 })
+  const [routingPolicy, setRoutingPolicy] = useState<RoutingPolicy>({ mode: 'balanced', priorityAccountIds: [], roundRobinCursor: 0 })
   const [message, setMessage] = useState('')
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -169,7 +169,7 @@ export function QuotaTrackerPage() {
             <h2 className="text-lg font-extrabold">Upload Routing</h2>
             <p className="mt-1 text-sm text-slate-500">Choose how new uploads pick connected storage accounts.</p>
           </div>
-          <label className="grid gap-2 text-sm font-semibold lg:w-64">Routing mode<select className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm" value={routingPolicy.mode} onChange={(event) => saveRoutingPolicy({ ...routingPolicy, mode: event.target.value as RoutingMode }).catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to update routing policy'))}><option value="most_available">Most available</option><option value="round_robin">Round robin</option><option value="priority">Priority order</option></select></label>
+          <label className="grid gap-2 text-sm font-semibold lg:w-64">Routing mode<select className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm" value={routingPolicy.mode} onChange={(event) => saveRoutingPolicy({ ...routingPolicy, mode: event.target.value as RoutingMode }).catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to update routing policy'))}><option value="balanced">Balanced (least full %)</option><option value="most_available">Most available</option><option value="round_robin">Round robin</option><option value="priority">Priority order</option></select></label>
         </div>
         <div className="mt-4 grid gap-3">
           {orderedAccounts().map((account, index) => <div key={account.id} className="flex flex-col gap-3 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">

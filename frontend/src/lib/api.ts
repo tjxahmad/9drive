@@ -9,7 +9,7 @@ export const API_URL = (rawApiUrl && rawApiUrl !== 'http://localhost:4000')
 
 type ApiOptions = RequestInit & { skipAuth?: boolean; retry?: boolean }
 
-async function refreshAccessToken() {
+export async function refreshAccessToken() {
   const refreshToken = getRefreshToken()
   if (!refreshToken) return false
   const response = await fetch(`${API_URL}/auth/refresh`, {

@@ -215,7 +215,7 @@ export function DriveLayout() {
   const [breakdown, setBreakdown] = useState<StorageBreakdown>({ photo: '0', video: '0', document: '0' })
   const [infoOpen, setInfoOpen] = useState(false)
   const [headerActions, setHeaderActions] = useState<ReactNode>(null)
-  const { uploadProgress, setUploadProgress, retryFailedUpload } = useUpload()
+  const { uploadProgress, setUploadProgress, retryFailedUpload, unfinishedUploads, dismissUnfinishedUploads } = useUpload()
   const [uploadProgressCollapsed, setUploadProgressCollapsed] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('9drive:theme')
@@ -510,6 +510,19 @@ export function DriveLayout() {
         </section>
       </div>
 
+      {!uploadProgress.open && unfinishedUploads.length > 0 ? (
+        <div role="status" className="fixed inset-x-3 bottom-3 z-[70] rounded-2xl border border-amber-200 bg-white p-4 text-sm shadow-2xl shadow-slate-900/20 sm:inset-x-auto sm:bottom-5 sm:right-5 sm:w-[min(420px,calc(100vw-2.5rem))]">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-extrabold text-slate-950">{unfinishedUploads.length} unfinished upload{unfinishedUploads.length > 1 ? 's' : ''}</p>
+              <p className="mt-1 truncate text-slate-500" title={unfinishedUploads.join(', ')}>{unfinishedUploads.join(', ')}</p>
+              <p className="mt-1 text-slate-500">Upload the same files again (same folder) to continue from where they stopped.</p>
+            </div>
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" aria-label="Dismiss" onClick={dismissUnfinishedUploads}><X className="h-4 w-4" /></Button>
+          </div>
+        </div>
+      ) : null}
+
       {uploadProgress.open ? (
         <div className="fixed inset-x-3 bottom-3 z-[70] max-h-[70dvh] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-900/20 sm:inset-x-auto sm:bottom-5 sm:right-5 sm:w-[min(420px,calc(100vw-2.5rem))]">
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
@@ -547,8 +560,8 @@ export function DriveLayout() {
                               Retry
                             </Button>
                           )}
-                          <span className={file.status === 'error' ? 'font-semibold text-red-600' : file.status === 'done' ? 'font-semibold text-emerald-600' : 'font-semibold text-blue-600'}>
-                            {file.status === 'error' ? 'Failed' : file.status === 'done' ? 'Done' : file.percent >= 99 ? 'Processing' : 'Uploading'}
+                          <span className={file.status === 'error' ? 'font-semibold text-red-600' : file.status === 'done' ? 'font-semibold text-emerald-600' : file.status === 'waiting' ? 'font-semibold text-amber-600' : 'font-semibold text-blue-600'}>
+                            {file.status === 'error' ? 'Failed' : file.status === 'done' ? 'Done' : file.status === 'waiting' ? 'Waiting for internet' : file.percent >= 99 ? 'Processing' : 'Uploading'}
                           </span>
                         </div>
                       </div>

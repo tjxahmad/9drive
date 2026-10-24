@@ -13,7 +13,7 @@ function bytesToString(value: bigint | number | string | null | undefined) {
   return value.toString()
 }
 
-const routingModes = ['most_available', 'round_robin', 'priority'] as const
+const routingModes = ['balanced', 'most_available', 'round_robin', 'priority'] as const
 const routingPolicySchema = z.object({ mode: z.enum(routingModes), priorityAccountIds: z.array(z.string().min(1)).max(100).optional() })
 
 function normalizePriorityAccountIds(value: unknown) {
@@ -23,7 +23,7 @@ function normalizePriorityAccountIds(value: unknown) {
 async function getOrCreateRoutingPolicy(userId: string) {
   return prisma.uploadRoutingPolicy.upsert({
     where: { userId },
-    create: { userId, mode: 'most_available', priorityAccountIds: [] },
+    create: { userId, mode: 'balanced', priorityAccountIds: [] },
     update: {},
   })
 }

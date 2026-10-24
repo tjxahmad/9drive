@@ -57,7 +57,7 @@ model ApiKey {
 model UploadRoutingPolicy {
   id                 String   @id @default(uuid()) @db.Char(36)
   userId             String   @unique @map("user_id") @db.Char(36)
-  mode               String   @default("most_available") @db.VarChar(32)
+  mode               String   @default("balanced") @db.VarChar(32)
   priorityAccountIds Json     @map("priority_account_ids")
   roundRobinCursor   Int      @default(0) @map("round_robin_cursor")
   createdAt          DateTime @default(now()) @map("created_at")

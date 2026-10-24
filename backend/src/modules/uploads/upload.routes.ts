@@ -14,7 +14,7 @@ import { createAuditLog } from '../../utils/audit.js'
 export const uploadRouter = Router()
 
 type UploadMeta = { fieldName: string; fileName: string; mimeType: string; sizeBytes: bigint; folderId?: string }
-type RoutingMode = 'most_available' | 'round_robin' | 'priority'
+type RoutingMode = 'balanced' | 'most_available' | 'round_robin' | 'priority'
 
 function logUpload(message: string, metadata?: Record<string, unknown>) {
   console.info('[upload]', message, metadata ?? '')
@@ -124,9 +124,26 @@ async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByA
   const preferred = preferredAccountId ? eligible.find(e => e.account.id === preferredAccountId) : undefined
   if (preferred) return preferred.account
 
-  const policy = await prisma.uploadRoutingPolicy.upsert({ where: { userId }, create: { userId, mode: 'most_available', priorityAccountIds: [] }, update: {} })
-  const mode = (['most_available', 'round_robin', 'priority'].includes(policy.mode) ? policy.mode : 'most_available') as RoutingMode
+  const policy = await prisma.uploadRoutingPolicy.upsert({ where: { userId }, create: { userId, mode: 'balanced', priorityAccountIds: [] }, update: {} })
+  const mode = (['balanced', 'most_available', 'round_robin', 'priority'].includes(policy.mode) ? policy.mode : 'balanced') as RoutingMode
   const priorityAccountIds = normalizePriorityAccountIds(policy.priorityAccountIds)
+
+  if (mode === 'balanced') {
+    // Fill accounts evenly: pick the one with the lowest % used (e.g. 10% full before 30% full).
+    // Accounts without a size limit go last; ties go to the one with more free space.
+    const usedFraction = (item: (typeof eligible)[number]) => {
+      const total = item.account.storageAccount?.totalBytes
+      if (!total || item.availableBytes === null) return Number.POSITIVE_INFINITY
+      return Number(total - item.availableBytes) / Number(total)
+    }
+    return [...eligible].sort((a, b) => {
+      const difference = usedFraction(a) - usedFraction(b)
+      if (Number.isFinite(difference) && difference !== 0) return difference
+      if (!Number.isFinite(usedFraction(a)) && Number.isFinite(usedFraction(b))) return 1
+      if (Number.isFinite(usedFraction(a)) && !Number.isFinite(usedFraction(b))) return -1
+      return Number((b.availableBytes ?? 0n) - (a.availableBytes ?? 0n))
+    })[0]?.account
+  }
 
   if (mode === 'priority') return byPriority(eligible, priorityAccountIds)[0]?.account ?? null
 
@@ -474,6 +491,9 @@ uploadRouter.get('/resumable/status/:id', requireAuth, async (req: AuthRequest, 
       }
     } else if (queryRes.ok) {
       return res.json({ status: 'completed', offset: session.sizeBytes.toString() })
+    } else if (queryRes.status === 404 || queryRes.status === 410) {
+      // Google discarded the upload session (expired); the client starts a new upload.
+      return res.json({ status: 'failed', offset: '0' })
     }
 
     return res.json({ status: 'uploading', offset: '0' })

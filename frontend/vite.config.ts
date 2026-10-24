@@ -26,7 +26,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        navigateFallbackDenylist: [/^\/(auth|connected-accounts|files|folders|invites|provider-configs|public|storage|uploads)(\/|$)/],
+        navigateFallbackDenylist: [/^\/(api|auth|connected-accounts|files|folders|invites|provider-configs|public|storage|uploads)(\/|$)/],
         globPatterns: ['**/*.{js,css,html,svg,ico,png,webp,woff2}'],
       },
     }),
@@ -34,6 +34,22 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+    },
+  },
+  // Production serving (`vite preview`): the web app and the API share one address, with /api proxied to the
+  // backend on 127.0.0.1:4000. Only this computer can reach it directly; phones reach it through Tailscale
+  // (`tailscale serve`), which is why *.ts.net host names are allowed.
+  preview: {
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true,
+    allowedHosts: ['.ts.net'],
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:4000',
+        changeOrigin: true,
+        rewrite: (requestPath) => requestPath.replace(/^\/api/, ''),
+      },
     },
   },
 })
