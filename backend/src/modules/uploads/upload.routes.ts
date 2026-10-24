@@ -27,16 +27,31 @@ function syncQuotaInBackground(accountId: string, sessionId: string) {
     .catch((error) => logUpload('quota sync failed', { accountId, sessionId, message: error instanceof Error ? error.message : 'Unknown error' }))
 }
 
-const STALE_S3_UPLOAD_MS = 24 * 60 * 60 * 1000
+const STALE_UPLOAD_MS = 24 * 60 * 60 * 1000
+const RECENT_UPLOAD_MS = 15 * 60 * 1000
 
-// Bytes of S3/R2 uploads still in progress, per account. Their parts already count as stored data,
-// so they are reserved when choosing an account. Uploads abandoned for 24 hours are aborted.
-async function pendingS3UploadBytes(userId: string) {
-  const sessions = await prisma.uploadSession.findMany({ where: { userId, status: 'uploading', s3UploadId: { not: null } } })
+// Bytes that use (or will soon use) space but may not show in an account's quota yet, per account: uploads in
+// progress (S3/R2 parts are already billed storage) and uploads finished in the last 15 minutes (Google updates its
+// storage numbers with a delay). Reserving them keeps back-to-back uploads spread across accounts.
+// S3/R2 uploads abandoned for 24 hours are aborted.
+async function pendingUploadBytes(userId: string) {
+  const staleBefore = new Date(Date.now() - STALE_UPLOAD_MS)
+  const sessions = await prisma.uploadSession.findMany({
+    where: {
+      userId,
+      OR: [
+        { status: 'uploading', createdAt: { gt: staleBefore } },
+        { status: 'uploading', s3UploadId: { not: null } },
+        // Only Google lags; S3/R2 usage is re-read right after each upload, so counting these again would double them.
+        { status: 'completed', completedAt: { gt: new Date(Date.now() - RECENT_UPLOAD_MS) }, targetConnectedAccount: { is: { provider: 'google_drive' } } },
+      ],
+    },
+  })
   const pending = new Map<string, bigint>()
   for (const session of sessions) {
-    if (!session.targetConnectedAccountId || !session.s3UploadId) continue
-    if (session.createdAt.getTime() < Date.now() - STALE_S3_UPLOAD_MS) {
+    if (!session.targetConnectedAccountId) continue
+    const stale = session.status === 'uploading' && session.createdAt < staleBefore
+    if (stale && session.s3UploadId) {
       try {
         const config = await getS3ConfigForAccount(session.targetConnectedAccountId, userId)
         await abortS3MultipartUpload(config, buildS3ObjectKey(config, userId, session.id, session.fileName), session.s3UploadId)
@@ -46,6 +61,7 @@ async function pendingS3UploadBytes(userId: string) {
       await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'failed', errorMessage: 'Abandoned upload aborted.' } })
       continue
     }
+    if (stale) continue
     pending.set(session.targetConnectedAccountId, (pending.get(session.targetConnectedAccountId) ?? 0n) + session.sizeBytes)
   }
   return pending
@@ -79,10 +95,9 @@ function byPriority<T extends { account: { id: string; createdAt: Date } }>(item
   })
 }
 
-// targetAccountId: the user picked this account explicitly, so use it or fail.
-// preferredAccountId: the folder's account; used when it has room, otherwise any account with space is chosen,
-// so a folder never stops uploads once its first account is full.
-async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByAccount = new Map<string, bigint>(), targetAccountId?: string | null, preferredAccountId?: string | null) {
+// targetAccountId: the user picked this account explicitly, so use it or fail. Otherwise the routing policy decides;
+// folders are virtual, so a folder's files can be spread over any accounts.
+async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByAccount = new Map<string, bigint>(), targetAccountId?: string | null) {
   const accounts = await prisma.connectedAccount.findMany({
     where: { userId, provider: { in: ['google_drive', 's3'] }, status: 'connected', ...(targetAccountId ? { id: targetAccountId } : {}) },
     include: { storageAccount: true },
@@ -120,9 +135,6 @@ async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByA
     const target = eligible.find(e => e.account.id === targetAccountId)
     return target?.account ?? null
   }
-
-  const preferred = preferredAccountId ? eligible.find(e => e.account.id === preferredAccountId) : undefined
-  if (preferred) return preferred.account
 
   const policy = await prisma.uploadRoutingPolicy.upsert({ where: { userId }, create: { userId, mode: 'balanced', priorityAccountIds: [] }, update: {} })
   const mode = (['balanced', 'most_available', 'round_robin', 'priority'].includes(policy.mode) ? policy.mode : 'balanced') as RoutingMode
@@ -174,7 +186,7 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
     let batchMeta: UploadMeta[] | null = null
     let responded = false
     let fileSeen = false
-    const reservedBytesByAccount = new Map<string, bigint>()
+    const reservedBytesByAccount = await pendingUploadBytes(req.user!.id)
     const completed: Array<Record<string, unknown>> = []
     const failed: Array<{ fileName: string; code: string; message: string }> = []
     const pendingUploads: Array<Promise<void>> = []
@@ -221,7 +233,7 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
         const folderId = meta.folderId || null
         const folderRecord = folderId ? await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } }) : null
 
-        const account = await selectAccount(req.user!.id, meta.sizeBytes, reservedBytesByAccount, undefined, folderRecord?.connectedAccountId)
+        const account = await selectAccount(req.user!.id, meta.sizeBytes, reservedBytesByAccount)
         if (!account) {
           fileStream.resume()
           failed.push({ fileName, code: 'NO_ACCOUNT_WITH_ENOUGH_SPACE', message: 'No connected storage account has enough space for this upload.' })
@@ -363,7 +375,7 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
     const folderId = body.folderId || null
     const folderRecord = folderId ? await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } }) : null
 
-    const account = await selectAccount(req.user!.id, sizeBytes, await pendingS3UploadBytes(req.user!.id), body.targetAccountId, folderRecord?.connectedAccountId)
+    const account = await selectAccount(req.user!.id, sizeBytes, await pendingUploadBytes(req.user!.id), body.targetAccountId)
     if (!account) return res.status(400).json({ code: 'NO_ACCOUNT_WITH_ENOUGH_SPACE', message: 'No connected storage account has enough space.' })
 
     if (account.provider === 's3') {
