@@ -3,6 +3,7 @@ import { Upload } from '@aws-sdk/lib-storage'
 import type { ConnectedAccount, File, S3StorageConfig } from '@prisma/client'
 import type { Response } from 'express'
 import type { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { prisma } from '../../config/prisma.js'
 import { decryptText } from '../../utils/crypto.js'
 
@@ -162,7 +163,16 @@ export async function syncS3Quota(accountId: string) {
 export async function streamS3File(file: FileWithAccount, range: string | undefined, res: Response, options: StreamOptions = {}) {
   const config = await getS3ConfigForAccount(file.connectedAccountId)
   const client = createS3Client(config)
-  const response = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: file.providerFileId, Range: range }))
+  // Stop reading from the bucket when the viewer goes away (e.g. on every video seek).
+  const controller = new AbortController()
+  res.on('close', () => controller.abort())
+  let response
+  try {
+    response = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: file.providerFileId, Range: range }), { abortSignal: controller.signal })
+  } catch (error) {
+    if (controller.signal.aborted) return
+    throw error
+  }
 
   res.status(response.ContentRange ? 206 : 200)
   res.setHeader('Content-Type', response.ContentType ?? file.mimeType)
@@ -173,5 +183,5 @@ export async function streamS3File(file: FileWithAccount, range: string | undefi
 
   const body = response.Body as Readable | undefined
   if (!body) return res.end()
-  return body.pipe(res)
+  await pipeline(body, res).catch(() => controller.abort())
 }

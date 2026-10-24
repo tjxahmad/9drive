@@ -11,6 +11,8 @@ import { streamProviderFile } from './stream-file.js'
 import { googleDownloadExportMimeTypes, normalizeHeaders, withExtension } from './stream-google-file.js'
 import { GetObjectCommand } from '@aws-sdk/client-s3'
 import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { ZipArchive } from 'archiver'
 import { createAuditLog } from '../../utils/audit.js'
 
@@ -306,7 +308,8 @@ fileRouter.post('/:id/preview-token', async (req: AuthRequest, res, next) => {
     const fileId = String(req.params.id)
     const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id, status: 'active' } })
     const token = randomToken(32)
-    await prisma.filePreviewToken.create({ data: { fileId: file.id, userId: req.user!.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 10 * 60_000) } })
+    // Long enough to watch (and seek in) a long video; the token only opens this one file.
+    await prisma.filePreviewToken.create({ data: { fileId: file.id, userId: req.user!.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 4 * 60 * 60_000) } })
     const path = `/files/preview/${token}`
     return res.status(201).json({ path, url: `${req.protocol}://${req.get('host')}${path}` })
   } catch (error) {
@@ -324,6 +327,40 @@ fileRouter.get('/:id/view-url', async (req: AuthRequest, res, next) => {
     // The Drive link stays private: it only opens for the Google account that owns the file.
     const metadata = await drive.files.get({ fileId: file.providerFileId, fields: 'webViewLink,webContentLink' })
     return res.json({ url: metadata.data.webViewLink ?? metadata.data.webContentLink })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+const MAX_S3_THUMBNAIL_SOURCE_BYTES = 8n * 1024n * 1024n
+
+// Small preview image for photos and videos (used by file and folder cards).
+fileRouter.get('/:id/thumbnail', async (req: AuthRequest, res, next) => {
+  try {
+    const file = await prisma.file.findFirstOrThrow({ where: { id: String(req.params.id), userId: req.user!.id, status: 'active' }, include: { connectedAccount: true } })
+    const noThumbnail = () => res.status(404).json({ code: 'NO_THUMBNAIL', message: 'No thumbnail for this file.' })
+    if (!file.mimeType.startsWith('image/') && !file.mimeType.startsWith('video/')) return noThumbnail()
+
+    if (file.provider === 's3') {
+      // S3/R2 has no thumbnail service: small images are sent as they are, others show an icon.
+      if (!file.mimeType.startsWith('image/') || file.sizeBytes > MAX_S3_THUMBNAIL_SOURCE_BYTES) return noThumbnail()
+      res.setHeader('Cache-Control', 'private, max-age=3600')
+      return streamProviderFile(file, undefined, res, { disposition: 'inline' })
+    }
+
+    const auth = await getAuthedGoogleClient(file.connectedAccount)
+    const drive = google.drive({ version: 'v3', auth })
+    const metadata = await drive.files.get({ fileId: file.providerFileId, fields: 'thumbnailLink' })
+    const link = metadata.data.thumbnailLink
+    if (!link) return noThumbnail()
+    // Google's short-lived thumbnail link; ask for a 400px version.
+    const sizedLink = link.replace(/=s\d+$/, '=s400')
+    let response = await fetch(sizedLink)
+    if (response.status === 401 || response.status === 403) response = await fetch(sizedLink, { headers: normalizeHeaders(await auth.getRequestHeaders()) })
+    if (!response.ok || !response.body) return noThumbnail()
+    res.setHeader('Content-Type', response.headers.get('content-type') ?? 'image/jpeg')
+    res.setHeader('Cache-Control', 'private, max-age=3600')
+    await pipeline(Readable.fromWeb(response.body as unknown as NodeReadableStream), res).catch(() => undefined)
   } catch (error) {
     return next(error)
   }

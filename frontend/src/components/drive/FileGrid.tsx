@@ -2,6 +2,7 @@ import { MoreVertical } from 'lucide-react'
 import type { MouseEvent } from 'react'
 import { Card } from '@/components/ui/card'
 import { FileIcon } from '@/components/drive/FileIcon'
+import { AuthThumbnail } from '@/components/drive/AuthThumbnail'
 import type { FileItem } from '@/data/drive-data'
 import { cn } from '@/lib/utils'
 
@@ -112,9 +113,19 @@ export function FileGrid({
             </div>
 
             <div className="flex justify-center mt-2">
-              <div className={cn("flex items-center justify-center rounded-2xl bg-slate-100 text-slate-700", cfg.iconShell)}>
-                <FileIcon kind={file.kind} className={cfg.icon} />
-              </div>
+              {file.kind === 'image' || file.kind === 'video' ? (
+                // Photos and videos show their thumbnail; the type icon is shown until it loads (or if there is none).
+                <AuthThumbnail
+                  fileId={file.id}
+                  alt={file.name}
+                  className="aspect-[4/3] w-full rounded-xl bg-slate-100"
+                  fallback={<div className="flex h-full w-full items-center justify-center text-slate-700"><FileIcon kind={file.kind} className={cfg.icon} /></div>}
+                />
+              ) : (
+                <div className={cn("flex items-center justify-center rounded-2xl bg-slate-100 text-slate-700", cfg.iconShell)}>
+                  <FileIcon kind={file.kind} className={cfg.icon} />
+                </div>
+              )}
             </div>
 
             <div className={cn("min-w-0 text-center", cfg.mtCard)}>

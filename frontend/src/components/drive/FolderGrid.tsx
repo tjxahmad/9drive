@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import type { FolderItem } from '@/data/drive-data'
 import { FolderVisual } from '@/components/drive/FolderVisual'
+import { AuthThumbnail } from '@/components/drive/AuthThumbnail'
 
 export type FolderSizeScale = 'xs' | 'sm' | 'md' | 'lg'
 
@@ -51,6 +52,7 @@ const scaleConfig: Record<FolderSizeScale, {
 
 export function FolderGrid({
   items,
+  covers = {},
   mobileTwoColumns = false,
   sizeScale = 'md',
   onFolderMenu,
@@ -58,6 +60,7 @@ export function FolderGrid({
   onDropItem,
 }: {
   items: FolderItem[]
+  covers?: Record<string, string[]>
   mobileTwoColumns?: boolean
   sizeScale?: FolderSizeScale
   onFolderMenu?: (event: MouseEvent<HTMLElement>, folder: FolderItem) => void
@@ -93,7 +96,19 @@ export function FolderGrid({
           >
             <MoreVertical className="h-4 w-4" />
           </button>
-          <FolderVisual folder={folder} className={cn('transition group-hover:scale-110', cfg.icon)} />
+          {folder.id && covers[folder.id]?.length ? (
+            // Folder cover: up to 4 photos/videos from inside the folder, with the folder icon as a badge.
+            <div className="relative mt-6 w-full">
+              <div className={cn('grid aspect-[4/3] w-full gap-0.5 overflow-hidden rounded-xl bg-slate-100', covers[folder.id].length > 1 && 'grid-cols-2', covers[folder.id].length > 2 && 'grid-rows-2')}>
+                {covers[folder.id].map((fileId, index) => (
+                  <AuthThumbnail key={fileId} fileId={fileId} className={cn('h-full w-full bg-slate-200/40', covers[folder.id!].length === 3 && index === 0 && 'row-span-2')} fallback={<div className="h-full w-full animate-pulse bg-slate-200/30" />} />
+                ))}
+              </div>
+              <FolderVisual folder={folder} className="absolute -bottom-2 -left-1 h-9 w-9 rounded-xl bg-slate-950/70 p-1.5 shadow-lg backdrop-blur" />
+            </div>
+          ) : (
+            <FolderVisual folder={folder} className={cn('transition group-hover:scale-110', cfg.icon)} />
+          )}
           <h2 className={cn('line-clamp-2 text-center font-extrabold leading-tight', cfg.title)}>{folder.name}</h2>
           <p className={cn('line-clamp-1 text-center text-slate-500', cfg.sub)}>{folder.updated}</p>
         </Card>

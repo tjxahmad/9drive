@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from 'react'
+import { useEffect, useState, type DragEvent, type FormEvent, type MouseEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Archive, ClipboardPaste, Download, FolderInput, FolderPlus, LayoutGrid, List, RefreshCw, Star, Trash2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,12 +11,12 @@ import { FileGrid } from '@/components/drive/FileGrid'
 import { FileTable } from '@/components/drive/FileTable'
 import { FolderContextMenu } from '@/components/drive/FolderContextMenu'
 import { FolderGrid, type FolderSizeScale } from '@/components/drive/FolderGrid'
-import { defaultFolderColor, defaultFolderIconUrl, folderColorOptions, folderIconOptions, normalizeFolderColor } from '@/components/drive/FolderVisual'
+import { defaultFolderColor, defaultFolderIconUrl, FolderIconGlyph, folderColorOptions, folderIconOptions, normalizeFolderColor } from '@/components/drive/FolderVisual'
 import { PageHeader } from '@/components/drive/PageHeader'
 import { Input } from '@/components/ui/input'
 import { API_URL, apiFetch, formatBytes, formatDate } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
-import { createPlyr, ensurePlyr } from '@/lib/plyr'
+import { MediaViewer } from '@/components/drive/MediaViewer'
 import { drivePreviewUrl, getPreviewKind } from '@/lib/preview'
 import type { FileItem, FolderItem } from '@/data/drive-data'
 import { useUpload } from '@/context/UploadContext'
@@ -72,7 +72,7 @@ function FolderAppearanceFields({ color, iconUrl, onColorChange, onIconChange }:
     <div className="grid gap-4">
       <label className="grid gap-2 text-sm font-semibold">Folder Color<Input type="color" value={normalizedColor} onChange={(event) => onColorChange(event.target.value)} className="h-12 p-1" /></label>
       <div className="flex flex-wrap gap-2">{folderColorOptions.map((option) => <button key={option} type="button" onClick={() => onColorChange(option)} className={normalizedColor === option ? 'h-8 w-8 rounded-lg border-2 border-blue-600' : 'h-8 w-8 rounded-lg border border-slate-200'} style={{ backgroundColor: option }} aria-label={`Use ${option} folder color`} />)}</div>
-      <div className="grid gap-2 text-sm font-semibold"><span>Folder Icon</span><div className="grid grid-cols-4 gap-2 sm:grid-cols-8">{folderIconOptions.map((option) => <button key={option.url} type="button" onClick={() => onIconChange(option.url)} className={iconUrl === option.url ? 'flex h-12 items-center justify-center rounded-xl border-2 border-blue-600 bg-blue-50 p-2' : 'flex h-12 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 p-2 hover:bg-slate-100'} title={option.label} aria-label={`Use ${option.label} icon`}><img src={`${option.url}?color=${encodeURIComponent(normalizedColor)}`} alt="" className="h-6 w-6" /></button>)}</div></div>
+      <div className="grid gap-2 text-sm font-semibold"><span>Folder Icon</span><div className="grid grid-cols-4 gap-2 sm:grid-cols-8">{folderIconOptions.map((option) => <button key={option.url} type="button" onClick={() => onIconChange(option.url)} className={iconUrl === option.url ? 'flex h-12 items-center justify-center rounded-xl border-2 border-blue-600 bg-blue-50 p-2' : 'flex h-12 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 p-2 hover:bg-slate-100'} title={option.label} aria-label={`Use ${option.label} icon`}><FolderIconGlyph iconUrl={option.url} color={normalizedColor} className="h-6 w-6" /></button>)}</div></div>
     </div>
   )
 }
@@ -95,6 +95,7 @@ export function AllFilesPage() {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [files, setFiles] = useState<FileItem[]>([])
   const [folders, setFolders] = useState<FolderItem[]>([])
+  const [folderCovers, setFolderCovers] = useState<Record<string, string[]>>({})
   const [allFolders, setAllFolders] = useState<FolderItem[]>([])
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicatePrompt | null>(null)
@@ -126,7 +127,6 @@ export function AllFilesPage() {
   const [inviteTargetId, setInviteTargetId] = useState('')
   const [inviteMessage, setInviteMessage] = useState('')
   const [inviting, setInviting] = useState(false)
-  const previewVideoRef = useRef<HTMLVideoElement | null>(null)
   const [folderSizeScale, setFolderSizeScale] = useState<FolderSizeScale>(() => {
     const v = localStorage.getItem('9drive:folder-size')
     return (v === 'xs' || v === 'sm' || v === 'md' || v === 'lg') ? v : 'md'
@@ -174,6 +174,7 @@ export function AllFilesPage() {
     ])
     setFolders(visibleData.folders.map(mapFolder))
     setAllFolders(allData.folders.map(mapFolder))
+    apiFetch<{ covers: Record<string, string[]> }>('/folders/covers').then((data) => setFolderCovers(data.covers)).catch(() => undefined)
   }
 
   async function loadAll() {
@@ -246,22 +247,6 @@ export function AllFilesPage() {
       window.removeEventListener('9drive:open-move-modal', onOpenMoveShortcut)
     }
   }, [activeFolderForMenu, cutFolder, activeFolderId])
-
-  useEffect(() => {
-    if (!previewOpen || !activeFile?.mimeType?.startsWith('video/') || !previewVideoRef.current) return undefined
-    let disposed = false
-    let player: { destroy: () => void } | null = null
-
-    ensurePlyr().then(() => {
-      if (disposed || !previewVideoRef.current) return
-      player = createPlyr(previewVideoRef.current)
-    }).catch(() => undefined)
-
-    return () => {
-      disposed = true
-      player?.destroy()
-    }
-  }, [previewOpen, activeFile?.mimeType, previewUrl])
 
   async function createFolder(event: FormEvent) {
     event.preventDefault()
@@ -731,14 +716,14 @@ export function AllFilesPage() {
         </div>
       </div>
       {message ? <p className="mt-3 rounded-xl bg-blue-50 p-3 text-sm text-blue-700">{message}</p> : null}
-      {!activeFolder && (recentFolders.length > 0 ? <FolderGrid items={recentFolders} mobileTwoColumns sizeScale={folderSizeScale} onFolderMenu={openFolderMenu} onFolderOpen={openFolder} onDropItem={handleDropItem} /> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No folders yet. Click New Folder to organize uploads.</p>)}
+      {!activeFolder && (recentFolders.length > 0 ? <FolderGrid items={recentFolders} covers={folderCovers} mobileTwoColumns sizeScale={folderSizeScale} onFolderMenu={openFolderMenu} onFolderOpen={openFolder} onDropItem={handleDropItem} /> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No folders yet. Click New Folder to organize uploads.</p>)}
       {!activeFolder && moreFolders.length > 0 ? <>
         <h2 className="mt-4 font-extrabold text-slate-700">More Folders</h2>
-        <FolderGrid items={moreFolders} sizeScale={folderSizeScale} onFolderMenu={openFolderMenu} onFolderOpen={openFolder} onDropItem={handleDropItem} />
+        <FolderGrid items={moreFolders} covers={folderCovers} sizeScale={folderSizeScale} onFolderMenu={openFolderMenu} onFolderOpen={openFolder} onDropItem={handleDropItem} />
       </> : null}
       {activeFolder && folders.length > 0 ? <>
         <h2 className="mt-4 font-extrabold text-slate-700">Folders</h2>
-        <FolderGrid items={folders} sizeScale={folderSizeScale} onFolderMenu={openFolderMenu} onFolderOpen={openFolder} onDropItem={handleDropItem} />
+        <FolderGrid items={folders} covers={folderCovers} sizeScale={folderSizeScale} onFolderMenu={openFolderMenu} onFolderOpen={openFolder} onDropItem={handleDropItem} />
       </> : null}
       <div className="mt-4 flex flex-col gap-2 sm:mt-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-3"><Button variant="soft" className="hidden sm:inline-flex"><Archive className="h-4 w-4" />Recents</Button><Button variant="soft" className="hidden sm:inline-flex"><Star className="h-4 w-4" />Starred</Button>{selectedFileIds.size > 0 ? <div className="flex w-full flex-col gap-3 rounded-2xl border border-orange-500/20 bg-orange-500/10 p-3 sm:w-auto sm:flex-row sm:items-center sm:border-0 sm:bg-transparent sm:p-0"><span className="text-sm font-extrabold text-slate-700">{selectedFileIds.size} selected</span><div className="grid grid-cols-4 gap-2 sm:flex sm:gap-3"><Button className="w-full" variant="outline" onClick={downloadBatchAsZip}><Download className="h-4 w-4" />ZIP</Button><Button className="w-full" variant="outline" onClick={() => setMoveOpen(true)}><FolderInput className="h-4 w-4" />Move</Button><Button className="w-full" variant="danger" onClick={() => setDeleteOpen(true)}><Trash2 className="h-4 w-4" />Delete</Button><Button className="w-full" variant="ghost" onClick={clearSelection}>Clear</Button></div></div> : null}</div>
@@ -829,17 +814,17 @@ export function AllFilesPage() {
           <div className="flex justify-end gap-3 pt-2"><Button type="button" variant="outline" onClick={() => setInviteOpen(false)}>Cancel</Button><Button disabled={inviting}>{inviting ? 'Sending...' : 'Send Invite'}</Button></div>
         </form>
       </DummyModal>
-      <DummyModal open={previewOpen} title="File Preview" description={activeFile?.name ?? ''} onClose={closePreview} className="overflow-hidden sm:max-w-[95vw] xl:max-w-[1400px]">
-        <div className="flex h-[72dvh] w-full items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 sm:h-[80vh]">
-          {previewLoading ? <div className="p-6 text-center text-sm font-semibold text-slate-500">Loading preview...</div> : null}
-          {previewError ? <div className="p-6 text-center text-sm text-red-600">{previewError}</div> : null}
-          {!previewLoading && !previewError && activePreviewKind === 'image' && previewUrl ? <img src={previewUrl} alt={activeFile?.name ?? 'File preview'} className="max-h-full max-w-full object-contain" onError={() => setPreviewError('Failed to load preview.')} /> : null}
-          {!previewLoading && !previewError && activePreviewKind === 'video' && previewUrl ? <div className="shared-video-shell"><video ref={previewVideoRef} controls playsInline preload="metadata" onError={() => setPreviewError('Failed to load preview.')}><source src={previewUrl} type={activeFile?.mimeType} /></video></div> : null}
-          {!previewLoading && !previewError && activePreviewKind === 'document' && previewUrl ? <iframe src={previewUrl} title={activeFile?.name ?? 'File preview'} className="h-full w-full border-0 bg-white" /> : null}
-          {!previewLoading && !previewError && activePreviewKind === 'office' && previewUrl ? <div className="flex h-full w-full flex-col"><iframe src={previewUrl} title={activeFile?.name ?? 'File preview'} className="w-full flex-1 border-0 bg-white" /><a href={previewUrl.replace('/preview', '/view')} target="_blank" rel="noopener noreferrer" className="p-2 text-center text-xs font-semibold text-blue-600 hover:underline">Preview blank? Open in Google Drive</a></div> : null}
-          {!previewLoading && !previewError && !activePreviewKind ? <div className="p-6 text-center text-sm text-slate-500">Preview not available for this file type. Use Download instead.</div> : null}
-        </div>
-      </DummyModal>
+      <MediaViewer
+        open={previewOpen}
+        name={activeFile?.name ?? ''}
+        kind={activePreviewKind}
+        url={previewUrl}
+        loading={previewLoading}
+        error={previewError}
+        onClose={closePreview}
+        onDownload={() => { downloadFile().catch((error) => setPreviewError(error instanceof Error ? error.message : 'Download failed')) }}
+        officeOpenUrl={activePreviewKind === 'office' && previewUrl ? previewUrl.replace('/preview', '/view') : undefined}
+      />
     </>
   )
 }

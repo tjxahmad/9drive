@@ -337,6 +337,26 @@ button.border-slate-200:not([style*="background-color"]):hover,
 }
 
 
+/* Full-screen media viewer: always light text on black, whatever the app theme. */
+.media-viewer {
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-bold: #ffffff;
+  color: #f8fafc;
+}
+
+.media-viewer-video .plyr,
+.media-viewer-video .plyr__video-wrapper,
+.media-viewer-video video {
+  height: 100%;
+  width: 100%;
+}
+
+.media-viewer-video video {
+  background: #000;
+  object-fit: contain;
+}
+
 /* Video Shell elements */
 .shared-video-shell {
   align-items: center;

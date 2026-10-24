@@ -46,7 +46,11 @@ export function ensurePlyr() {
 
 export function createPlyr(element: HTMLVideoElement) {
   if (!window.Plyr) return null
-  return new window.Plyr(element, { ratio: '16:9', controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'captions', 'settings', 'pip', 'airplay', 'fullscreen'] })
+  return new window.Plyr(element, {
+    controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'captions', 'settings', 'pip', 'airplay', 'fullscreen'],
+    // iPhone: use the native full-screen player (rotates with the phone); elsewhere the Fullscreen API.
+    fullscreen: { enabled: true, fallback: true, iosNative: true },
+  })
 }
 
 export {}

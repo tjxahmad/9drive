@@ -95,6 +95,35 @@ folderRouter.get('/', async (req: AuthRequest, res, next) => {
   }
 })
 
+// Up to 4 newest photos/videos directly inside each folder, shown as the folder's cover.
+folderRouter.get('/covers', async (req: AuthRequest, res, next) => {
+  try {
+    const files = await prisma.file.findMany({
+      where: {
+        userId: req.user!.id,
+        status: 'active',
+        folderId: { not: null },
+        OR: [
+          { mimeType: { startsWith: 'image/' } },
+          // S3/R2 has no video thumbnails, so only Google Drive videos can be covers.
+          { mimeType: { startsWith: 'video/' }, provider: 'google_drive' },
+        ],
+      },
+      select: { id: true, folderId: true },
+      orderBy: { createdAt: 'desc' },
+      take: 5000,
+    })
+    const covers: Record<string, string[]> = {}
+    for (const file of files) {
+      const list = (covers[file.folderId!] ??= [])
+      if (list.length < 4) list.push(file.id)
+    }
+    return res.json({ covers })
+  } catch (error) {
+    return next(error)
+  }
+})
+
 folderRouter.get('/recent', async (req: AuthRequest, res, next) => {
   try {
     const limit = Math.min(Number(req.query.limit ?? 4), 4)

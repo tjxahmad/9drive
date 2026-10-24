@@ -1,4 +1,9 @@
-import { Folder } from 'lucide-react'
+import {
+  Archive, BookOpen, Box, Briefcase, Calendar, ChartColumn, Clock, Cloud, CloudDownload, CloudUpload, Code, Database,
+  File as FileGlyph, FileArchive, FileCode, FileImage, FileMusic, FileText, FileVideo, Files, Film, Folder, FolderOpen, Folders,
+  GraduationCap, HardDrive, Headphones, Heart, Image, Images, Lock, Music, Notebook, Package, Receipt, Rocket, Server, Share2,
+  Shield, Sparkles, Star, Terminal, UserCheck, Users, Video, Wallet, type LucideIcon,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { FolderItem } from '@/data/drive-data'
 
@@ -11,6 +16,8 @@ const legacyColorMap: Record<string, string> = {
 }
 
 export const defaultFolderColor = '#3b82f6'
+// Folder icons are stored as these identifiers, but drawn locally with lucide-react (no request to iconify.design,
+// whose `lucide:name.svg` URL format no longer works).
 export const defaultFolderIconUrl = 'https://api.iconify.design/lucide:folder.svg'
 
 export const folderIconOptions = [
@@ -68,17 +75,32 @@ export function normalizeFolderColor(color?: string | null) {
   return legacyColorMap[color ?? ''] ?? defaultFolderColor
 }
 
-export function iconUrlWithColor(iconUrl: string, color: string) {
-  const separator = iconUrl.includes('?') ? '&' : '?'
-  return `${iconUrl}${separator}color=${encodeURIComponent(color)}`
+const folderIconComponents: Record<string, LucideIcon> = {
+  'folder': Folder, 'folder-open': FolderOpen, 'folders': Folders, 'files': Files, 'file-text': FileText, 'file-image': FileImage,
+  'file-video': FileVideo, 'file-music': FileMusic, 'file-code': FileCode, 'file-archive': FileArchive, 'briefcase': Briefcase,
+  'archive': Archive, 'cloud': Cloud, 'cloud-upload': CloudUpload, 'cloud-download': CloudDownload, 'hard-drive': HardDrive,
+  'database': Database, 'server': Server, 'image': Image, 'images': Images, 'video': Video, 'film': Film, 'music': Music,
+  'headphones': Headphones, 'code': Code, 'terminal': Terminal, 'package': Package, 'box': Box, 'book-open': BookOpen,
+  'notebook': Notebook, 'graduation-cap': GraduationCap, 'receipt': Receipt, 'wallet': Wallet, 'chart-column': ChartColumn,
+  'calendar': Calendar, 'clock': Clock, 'users': Users, 'user-check': UserCheck, 'share-2': Share2, 'lock': Lock,
+  'shield': Shield, 'star': Star, 'heart': Heart, 'rocket': Rocket, 'sparkles': Sparkles,
+}
+
+function folderIconComponent(iconUrl?: string | null): LucideIcon {
+  const name = iconUrl?.match(/lucide:([a-z0-9-]+)\.svg/)?.[1]
+  return (name && folderIconComponents[name]) || (name ? FileGlyph : Folder)
+}
+
+export function FolderIconGlyph({ iconUrl, color, className }: { iconUrl?: string | null; color: string; className?: string }) {
+  const Icon = folderIconComponent(iconUrl || defaultFolderIconUrl)
+  const filled = Icon === Folder || Icon === FolderOpen
+  return <Icon aria-hidden="true" className={cn('h-full w-full', className)} style={{ color }} fill={filled ? color : 'none'} fillOpacity={filled ? 0.25 : undefined} strokeWidth={1.75} />
 }
 
 export function FolderVisual({ folder, className, iconClassName }: { folder: Pick<FolderItem, 'color' | 'iconUrl'>; className?: string; iconClassName?: string }) {
-  const color = normalizeFolderColor(folder.color)
-  const iconUrl = folder.iconUrl || defaultFolderIconUrl
   return (
     <span className={cn('inline-flex items-center justify-center', className)}>
-      {iconUrl ? <img src={iconUrlWithColor(iconUrl, color)} alt="" className={cn('h-full w-full object-contain', iconClassName)} /> : <Folder className={cn('h-full w-full fill-current stroke-current', iconClassName)} style={{ color }} />}
+      <FolderIconGlyph iconUrl={folder.iconUrl} color={normalizeFolderColor(folder.color)} className={iconClassName} />
     </span>
   )
 }

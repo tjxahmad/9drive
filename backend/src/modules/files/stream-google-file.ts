@@ -1,4 +1,7 @@
 import type { Response } from 'express'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import type { ConnectedAccount, File } from '@prisma/client'
 import { getAuthedGoogleClient } from '../google/google.service.js'
 
@@ -40,12 +43,23 @@ export async function streamGoogleFile(file: FileWithAccount, range: string | un
   const url = exportTarget
     ? `https://www.googleapis.com/drive/v3/files/${file.providerFileId}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
     : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
-  const response = await fetch(url, {
-    headers: {
-      ...headers,
-      ...(range && !exportTarget ? { Range: range } : {}),
-    },
-  })
+  // Stop downloading from Google as soon as the viewer goes away (video players drop requests on every seek;
+  // without this the rest of a large video kept downloading in the background).
+  const controller = new AbortController()
+  res.on('close', () => controller.abort())
+  let response: globalThis.Response
+  try {
+    response = await fetch(url, {
+      headers: {
+        ...headers,
+        ...(range && !exportTarget ? { Range: range } : {}),
+      },
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (controller.signal.aborted) return
+    throw error
+  }
 
   if (!response.ok) {
     const message = await response.text().catch(() => response.statusText)
@@ -66,15 +80,6 @@ export async function streamGoogleFile(file: FileWithAccount, range: string | un
     res.end()
     return
   }
-  const reader = response.body.getReader()
-  async function pump(): Promise<void> {
-    const { done, value } = await reader.read()
-    if (done) {
-      res.end()
-      return
-    }
-    res.write(Buffer.from(value))
-    return pump()
-  }
-  return pump()
+  // pipeline respects backpressure and tears down both sides if either one closes.
+  await pipeline(Readable.fromWeb(response.body as unknown as NodeReadableStream), res).catch(() => controller.abort())
 }
