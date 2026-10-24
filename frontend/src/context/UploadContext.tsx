@@ -28,7 +28,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const [resumableSessions, setResumableSessions] = useState<Record<string, ResumableSession>>({})
 
   async function uploadSingleFileResumable(file: File, folderId: string | null, onProgress: (percent: number) => void, sessionIdToRetry?: string, targetAccountId?: string | null) {
-    const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB chunks (must be multiple of 256KB for Google Drive)
+    const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB chunks (multiple of 256KB for Google Drive; must equal S3_PART_SIZE in the backend for S3/R2)
     let sessionId = sessionIdToRetry || ''
     let startOffset = 0
 

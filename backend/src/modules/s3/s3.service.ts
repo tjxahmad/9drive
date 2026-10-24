@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, ListPartsCommand, S3Client, UploadPartCommand } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import type { ConnectedAccount, File, S3StorageConfig } from '@prisma/client'
 import type { Response } from 'express'
@@ -26,6 +26,24 @@ export function createS3Client(config: S3Config) {
   })
 }
 
+// Cloudflare R2's free tier includes 10 GB of storage per month. Every R2 bucket is capped below that
+// (9 GB, counting everything in the bucket) so usage never becomes billable, whatever quota was entered.
+export const R2_FREE_TIER_SAFE_BYTES = 9_000_000_000n
+
+export function isCloudflareR2(endpoint: string | null | undefined) {
+  if (!endpoint) return false
+  try {
+    return new URL(endpoint).hostname.toLowerCase().endsWith('.r2.cloudflarestorage.com')
+  } catch {
+    return false
+  }
+}
+
+export function effectiveQuotaBytes(config: Pick<S3Config, 'endpoint' | 'quotaBytes'>) {
+  if (!isCloudflareR2(config.endpoint)) return config.quotaBytes
+  return config.quotaBytes === null || config.quotaBytes > R2_FREE_TIER_SAFE_BYTES ? R2_FREE_TIER_SAFE_BYTES : config.quotaBytes
+}
+
 export async function getS3ConfigForAccount(accountId: string, userId?: string) {
   return prisma.s3StorageConfig.findFirstOrThrow({ where: { connectedAccountId: accountId, status: 'active', ...(userId ? { userId } : {}) } })
 }
@@ -51,6 +69,48 @@ export async function uploadS3Object(config: S3Config, key: string, body: NodeJS
   }).done()
 }
 
+// Chunked uploads from the browser use S3 multipart uploads. Must match the frontend chunk size;
+// S3/R2 need every part except the last to be at least 5 MiB (R2 also needs them equal).
+export const S3_PART_SIZE = 5 * 1024 * 1024
+
+export async function createS3MultipartUpload(config: S3Config, key: string, mimeType: string) {
+  const client = createS3Client(config)
+  const response = await client.send(new CreateMultipartUploadCommand({ Bucket: config.bucket, Key: key, ContentType: mimeType }))
+  if (!response.UploadId) throw new Error('Storage did not return a multipart upload id.')
+  return response.UploadId
+}
+
+export async function uploadS3Part(config: S3Config, key: string, uploadId: string, partNumber: number, body: Buffer) {
+  const client = createS3Client(config)
+  await client.send(new UploadPartCommand({ Bucket: config.bucket, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: body, ContentLength: body.length }))
+}
+
+export async function listS3UploadedParts(config: S3Config, key: string, uploadId: string) {
+  const client = createS3Client(config)
+  const parts: Array<{ partNumber: number; etag: string; size: number }> = []
+  let marker: string | undefined
+  do {
+    const response = await client.send(new ListPartsCommand({ Bucket: config.bucket, Key: key, UploadId: uploadId, PartNumberMarker: marker }))
+    for (const part of response.Parts ?? []) {
+      if (part.PartNumber && part.ETag) parts.push({ partNumber: part.PartNumber, etag: part.ETag, size: part.Size ?? 0 })
+    }
+    marker = response.IsTruncated ? response.NextPartNumberMarker : undefined
+  } while (marker)
+  return parts.sort((a, b) => a.partNumber - b.partNumber)
+}
+
+export async function completeS3MultipartUpload(config: S3Config, key: string, uploadId: string) {
+  const parts = await listS3UploadedParts(config, key, uploadId)
+  const client = createS3Client(config)
+  await client.send(new CompleteMultipartUploadCommand({
+    Bucket: config.bucket,
+    Key: key,
+    UploadId: uploadId,
+    MultipartUpload: { Parts: parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })) },
+  }))
+  return parts.reduce((sum, part) => sum + BigInt(part.size), 0n)
+}
+
 export async function deleteS3Object(file: FileWithAccount) {
   const config = await getS3ConfigForAccount(file.connectedAccountId)
   const client = createS3Client(config)
@@ -68,19 +128,21 @@ export async function syncS3Quota(accountId: string) {
     continuationToken = response.NextContinuationToken
   } while (continuationToken)
 
+  const quotaBytes = effectiveQuotaBytes(config)
+  const availableBytes = quotaBytes === null ? null : (quotaBytes > usedBytes ? quotaBytes - usedBytes : 0n)
   return prisma.storageAccount.upsert({
     where: { connectedAccountId: accountId },
     create: {
       connectedAccountId: accountId,
-      totalBytes: config.quotaBytes,
+      totalBytes: quotaBytes,
       usedBytes,
-      availableBytes: config.quotaBytes === null ? null : config.quotaBytes - usedBytes,
+      availableBytes,
       lastSyncedAt: new Date(),
     },
     update: {
-      totalBytes: config.quotaBytes,
+      totalBytes: quotaBytes,
       usedBytes,
-      availableBytes: config.quotaBytes === null ? null : config.quotaBytes - usedBytes,
+      availableBytes,
       lastSyncedAt: new Date(),
     },
   })

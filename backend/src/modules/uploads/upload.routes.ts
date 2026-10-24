@@ -8,7 +8,7 @@ import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { ensureGoogleAppFolder, getAuthedGoogleClient, syncGoogleQuota } from '../google/google.service.js'
-import { buildS3ObjectKey, getS3ConfigForAccount, syncS3Quota, uploadS3Object } from '../s3/s3.service.js'
+import { buildS3ObjectKey, completeS3MultipartUpload, createS3MultipartUpload, getS3ConfigForAccount, listS3UploadedParts, S3_PART_SIZE, syncS3Quota, uploadS3Object, uploadS3Part } from '../s3/s3.service.js'
 import { createAuditLog } from '../../utils/audit.js'
 
 export const uploadRouter = Router()
@@ -25,6 +25,18 @@ function syncQuotaInBackground(accountId: string, sessionId: string) {
   syncGoogleQuota(accountId)
     .then(() => logUpload('quota sync completed', { accountId, sessionId }))
     .catch((error) => logUpload('quota sync failed', { accountId, sessionId, message: error instanceof Error ? error.message : 'Unknown error' }))
+}
+
+// Reads one upload chunk into memory, refusing bodies larger than the declared size.
+async function readChunk(req: AuthRequest, maxBytes: number) {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > maxBytes) throw new Error('Chunk is larger than its Content-Range.')
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
 }
 
 function normalizePriorityAccountIds(value: unknown) {
@@ -240,7 +252,8 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
           completed.push({ ...file, sizeBytes: file.sizeBytes.toString() })
         }
         await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'completed', completedAt: new Date() } })
-        if (account.provider === 's3') syncS3Quota(account.id).catch(() => undefined)
+        // Await for S3/R2 so the next upload sees fresh usage (keeps R2 under its free-tier cap).
+        if (account.provider === 's3') await syncS3Quota(account.id).catch(() => undefined)
         else syncQuotaInBackground(account.id, session.id)
       } catch (error) {
         fileStream.resume()
@@ -319,7 +332,9 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
     const account = await selectAccount(req.user!.id, sizeBytes, undefined, targetAccountId)
     if (!account) return res.status(400).json({ code: 'NO_ACCOUNT_WITH_ENOUGH_SPACE', message: 'No connected storage account has enough space.' })
 
-    if (account.provider !== 'google_drive') {
+    if (account.provider === 's3') {
+      // S3/R2: browser chunks become parts of an S3 multipart upload.
+      const config = await getS3ConfigForAccount(account.id, req.user!.id)
       const session = await prisma.uploadSession.create({
         data: {
           userId: req.user!.id,
@@ -331,7 +346,13 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
           status: 'uploading'
         }
       })
-      return res.status(201).json({ sessionId: session.id, provider: account.provider, offset: 0 })
+      const uploadId = await createS3MultipartUpload(config, buildS3ObjectKey(config, req.user!.id, session.id, body.fileName), body.mimeType)
+      await prisma.uploadSession.update({ where: { id: session.id }, data: { s3UploadId: uploadId } })
+      return res.status(201).json({ sessionId: session.id, provider: 's3', offset: 0 })
+    }
+
+    if (account.provider !== 'google_drive') {
+      return res.status(400).json({ code: 'UNSUPPORTED_PROVIDER', message: 'Unsupported storage provider.' })
     }
 
     const auth = await getAuthedGoogleClient(account)
@@ -399,6 +420,18 @@ uploadRouter.get('/resumable/status/:id', requireAuth, async (req: AuthRequest, 
       return res.json({ status: 'completed', offset: session.sizeBytes.toString() })
     }
 
+    if (session.s3UploadId && session.targetConnectedAccountId) {
+      // Resume after the last part that S3 has, counting only an unbroken run from part 1.
+      const config = await getS3ConfigForAccount(session.targetConnectedAccountId, req.user!.id)
+      const parts = await listS3UploadedParts(config, buildS3ObjectKey(config, req.user!.id, session.id, session.fileName), session.s3UploadId)
+      let contiguous = 0
+      while (parts[contiguous]?.partNumber === contiguous + 1 && parts[contiguous].size === S3_PART_SIZE) contiguous += 1
+      // Never skip the final part: sending it is what completes the upload.
+      const finalPartStart = ((session.sizeBytes - 1n) / BigInt(S3_PART_SIZE)) * BigInt(S3_PART_SIZE)
+      const offset = BigInt(contiguous) * BigInt(S3_PART_SIZE)
+      return res.json({ status: 'uploading', offset: (offset < finalPartStart ? offset : finalPartStart).toString() })
+    }
+
     if (!session.googleSessionUri || !session.targetConnectedAccountId) {
       return res.json({ status: 'uploading', offset: '0' })
     }
@@ -456,6 +489,36 @@ uploadRouter.put('/resumable/chunk/:id', requireAuth, async (req: AuthRequest, r
     const startByte = BigInt(match[1])
     const endByte = BigInt(match[2])
     const totalBytes = BigInt(match[3])
+
+    if (session.s3UploadId && session.targetConnectedAccountId) {
+      const partSize = BigInt(S3_PART_SIZE)
+      const chunkBytes = endByte - startByte + 1n
+      const isLast = endByte + 1n === totalBytes
+      if (totalBytes !== session.sizeBytes || endByte < startByte || endByte >= totalBytes || startByte % partSize !== 0n || (!isLast && chunkBytes !== partSize) || chunkBytes > partSize) {
+        return res.status(400).json({ code: 'INVALID_CONTENT_RANGE', message: 'Chunks must be 5 MiB parts in order.' })
+      }
+      const body = await readChunk(req, Number(chunkBytes))
+      if (BigInt(body.length) !== chunkBytes) return res.status(400).json({ code: 'UPLOAD_SIZE_MISMATCH', message: 'Chunk size did not match Content-Range.' })
+
+      const config = await getS3ConfigForAccount(session.targetConnectedAccountId, req.user!.id)
+      const key = buildS3ObjectKey(config, req.user!.id, session.id, session.fileName)
+      await uploadS3Part(config, key, session.s3UploadId, Number(startByte / partSize) + 1, body)
+      if (!isLast) return res.json({ status: 'uploading', offset: (endByte + 1n).toString() })
+
+      const uploadedBytes = await completeS3MultipartUpload(config, key, session.s3UploadId)
+      if (uploadedBytes !== totalBytes) {
+        await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'failed', errorMessage: 'Uploaded size did not match declared size.' } })
+        return res.status(400).json({ code: 'UPLOAD_SIZE_MISMATCH', message: 'Uploaded size did not match declared size.' })
+      }
+      const file = await prisma.file.create({
+        data: { userId: req.user!.id, connectedAccountId: session.targetConnectedAccountId, folderId: session.folderId, provider: 's3', providerFileId: key, name: session.fileName, mimeType: session.mimeType, sizeBytes: totalBytes }
+      })
+      await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'completed', completedAt: new Date() } })
+      await createAuditLog(req.user!.id, 'UPLOAD_FILE', 'file', file.id, { name: file.name, size: file.sizeBytes.toString() })
+      // Await so the next upload sees fresh usage (keeps R2 under its free-tier cap).
+      await syncS3Quota(session.targetConnectedAccountId).catch(() => undefined)
+      return res.status(201).json({ status: 'completed', file: { ...file, sizeBytes: file.sizeBytes.toString() } })
+    }
 
     if (!session.googleSessionUri || !session.targetConnectedAccountId) {
       return res.status(400).json({ code: 'UNSUPPORTED_PROVIDER', message: 'Only Google Drive resumable uploads supported.' })

@@ -8,7 +8,7 @@ import { HttpError } from '../../middleware/error.middleware.js'
 import { decryptText, encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { findOrCreateOwnerForGoogle } from '../../utils/owner.js'
 import { createOAuthClient, syncGoogleQuota } from '../google/google.service.js'
-import { syncS3Quota, testS3Connection } from '../s3/s3.service.js'
+import { effectiveQuotaBytes, syncS3Quota, testS3Connection } from '../s3/s3.service.js'
 
 export const connectedAccountRouter = Router()
 
@@ -84,14 +84,14 @@ async function createGoogleConnectUrl(req: AuthRequest) {
 connectedAccountRouter.post('/s3', requireAuth, async (req: AuthRequest, res, next) => {
   try {
     const body = s3ConnectSchema.parse(req.body)
-    const providerConfig = await prisma.providerConfig.findFirstOrThrow({ where: { provider: 'google_drive', status: 'active' }, orderBy: { createdAt: 'desc' } })
+    const quotaBytes = effectiveQuotaBytes({ endpoint: body.endpoint || null, quotaBytes: body.quotaBytes ? BigInt(body.quotaBytes) : null })
     const providerAccountId = `${body.bucket}:${body.endpoint || body.region}`
     const existingAccount = await prisma.connectedAccount.findUnique({ where: { userId_provider_providerAccountId: { userId: req.user!.id, provider: 's3', providerAccountId } } })
     const account = existingAccount
       ? await prisma.connectedAccount.update({
         where: { id: existingAccount.id },
         data: {
-          providerConfigId: providerConfig.id,
+          providerConfigId: null,
           email: `${body.bucket} (S3)`,
           displayName: body.name,
           accessTokenEncrypted: encryptText('s3'),
@@ -103,7 +103,7 @@ connectedAccountRouter.post('/s3', requireAuth, async (req: AuthRequest, res, ne
       })
       : await prisma.connectedAccount.create({ data: {
         userId: req.user!.id,
-        providerConfigId: providerConfig.id,
+        providerConfigId: null,
         provider: 's3',
         providerAccountId,
         email: `${body.bucket} (S3)`,
@@ -126,7 +126,7 @@ connectedAccountRouter.post('/s3', requireAuth, async (req: AuthRequest, res, ne
         accessKeyIdEncrypted: encryptText(body.accessKeyId),
         secretAccessKeyEncrypted: encryptText(body.secretAccessKey),
         forcePathStyle: body.forcePathStyle ?? Boolean(body.endpoint),
-        quotaBytes: body.quotaBytes ? BigInt(body.quotaBytes) : null,
+        quotaBytes,
       },
       update: {
         name: body.name,
@@ -136,7 +136,7 @@ connectedAccountRouter.post('/s3', requireAuth, async (req: AuthRequest, res, ne
         accessKeyIdEncrypted: encryptText(body.accessKeyId),
         secretAccessKeyEncrypted: encryptText(body.secretAccessKey),
         forcePathStyle: body.forcePathStyle ?? Boolean(body.endpoint),
-        quotaBytes: body.quotaBytes ? BigInt(body.quotaBytes) : null,
+        quotaBytes,
         status: 'active',
       },
     })

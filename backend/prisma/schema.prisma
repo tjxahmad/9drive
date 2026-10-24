@@ -306,6 +306,7 @@ model UploadSession {
   sizeBytes                BigInt            @map("size_bytes")
   status                   String            @db.VarChar(32)
   googleSessionUri         String?           @map("google_session_uri") @db.Text
+  s3UploadId               String?           @map("s3_upload_id") @db.VarChar(1024)
   errorMessage             String?           @map("error_message") @db.Text
   createdAt                DateTime          @default(now()) @map("created_at")
   completedAt              DateTime?         @map("completed_at")
