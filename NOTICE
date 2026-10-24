@@ -1,0 +1,11 @@
+9Drive
+Copyright 2026 Zenhosta
+
+This product is based on 9Drive by Zenhosta
+(https://github.com/zenhosta/9drive), licensed under the Apache License,
+Version 2.0. See the LICENSE file.
+
+Modified in 2026: security hardening for private single-owner use, S3/R2
+upload fixes, and other changes listed in README.md ("Changes in this
+version"). Modified files carry the changes; the commit history records
+each change.

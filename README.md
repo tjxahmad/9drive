@@ -2,6 +2,28 @@
 
 # 9Drive
 
+> **Credit:** 9Drive was created by **[Zenhosta](https://github.com/zenhosta)** — original project: **[github.com/zenhosta/9drive](https://github.com/zenhosta/9drive)** (Apache License 2.0). All credit for the original app goes to Zenhosta and its contributors. This repository is a modified copy focused on private, single-owner use on a personal computer; the changes are listed below.
+
+## Changes in this version
+
+Security and privacy:
+
+- Files stay private: uploads no longer get the "anyone with the link can edit" Google Drive permission; the "make public" and public share-link features and invites are disabled; Sync removes existing public links from files and folders in the `9drive` Drive folder.
+- Single-owner mode: only the first account (or `OWNER_EMAIL`) can register, log in, use Google sign-in or API keys.
+- Removed the HTTP routes that ran `git pull` / `update.sh` and replaced the database.
+- The API listens on `127.0.0.1` by default (`HOST`), Docker ports are bound to localhost, placeholder secrets are rejected, JWTs are pinned to HS256, login/register are rate limited, and internal database errors are no longer sent to the browser.
+- No data sent to third parties: Office previews use Google Drive's own viewer instead of Microsoft's, avatars are generated locally instead of Gravatar/DiceBear, and the Plyr CDN files are loaded with Subresource Integrity.
+- OAuth errors are logged without client secrets; Google sign-in requires a verified email; dependencies updated with `npm audit fix`.
+
+Storage:
+
+- S3/R2 uploads from the browser work (chunked uploads become S3 multipart uploads, resumable).
+- Cloudflare R2 buckets are capped at 9 GB so usage stays inside R2's free 10 GB of storage; in-progress uploads count toward the cap and abandoned ones are aborted after 24 hours.
+- Uploads into a folder fall back to any account with space when the folder's account is full.
+- Deleting a folder moves its files to the Recycle Bin instead of deleting them from Google Drive; Sync no longer reverts files moved in the app or restores files from the Recycle Bin.
+
+## About
+
 9Drive is a storage gateway web app for connecting multiple Google Drive accounts into one virtual storage dashboard. Users can register with email/password or Google, automatically connect their first Google Drive account during Google sign-in, track quota, upload files into a dedicated `9drive` Drive folder, organize files with virtual folders, preview files, sync MySQL from Google Drive, and let the backend route uploads to the Drive account with enough free space.
 
 ## License
@@ -30,7 +52,6 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 - Bottom-right upload progress panel.
 - Bearer token authentication.
 - Global Google OAuth config stored encrypted in DB (can be set via seed command or directly in Settings UI).
-- Automated system updates via `update.sh` directly from the Settings UI (PM2 setup).
 - Optional reCAPTCHA on email/password registration.
 - MySQL database with Prisma migrations.
 - Express + TypeScript backend.
@@ -698,27 +719,13 @@ Instead of seeding Google credentials manually using `npm run seed:google-config
 
 The config is automatically encrypted and saved into the database, enabling Google sign-in and Google Drive connections instantly.
 
-## Automated Updates & PM2 Management
+## Updates
 
-For native VPS setups running with PM2, 9Drive includes a fully automated system update trigger and log monitor in the **Settings** UI.
-
-### How it works
-1. When you trigger an update from the frontend dashboard, the backend triggers the `update.sh` script in the background.
-2. The script:
-   - Resets any local Git conflicts (`git reset --hard`) and pulls the latest changes.
-   - Installs dependencies and builds both backend and frontend.
-   - Deploys Prisma database migrations.
-   - Restarts the backend process using PM2 (`pm2 restart 9drive-backend`).
-3. You can monitor the real-time rebuild progress using the log viewer inside the Settings UI.
+In this version the dashboard can no longer run updates or restore the database (those HTTP routes were removed for security). Update from a terminal on the machine itself.
 
 ### Manual update command
-If you want to update manually via the terminal, run:
+Commit or back up local changes first (`git status`).
 ```bash
-./update.sh
-```
-Or run the commands individually:
-```bash
-git reset --hard
 git pull origin main
 cd backend && npm install && npx prisma generate && npm run build && npx prisma migrate deploy
 cd ../frontend && npm install && npm run build
