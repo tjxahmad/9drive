@@ -150,6 +150,11 @@ fileRouter.post('/batch/restore', async (req: AuthRequest, res, next) => {
       where: { id: { in: body.fileIds }, userId: req.user!.id, status: 'deleted' },
       data: { status: 'active', deletedAt: null }
     })
+    // A file whose folder was deleted comes back to the top level instead of an invisible folder.
+    await prisma.file.updateMany({
+      where: { id: { in: body.fileIds }, userId: req.user!.id, folder: { is: { deletedAt: { not: null } } } },
+      data: { folderId: null }
+    })
     for (const f of files) {
       await createAuditLog(req.user!.id, 'RESTORE_FILE', 'file', f.id, { name: f.name })
     }

@@ -1,4 +1,4 @@
-import { CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, ListPartsCommand, S3Client, UploadPartCommand } from '@aws-sdk/client-s3'
+import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, ListPartsCommand, S3Client, UploadPartCommand } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import type { ConnectedAccount, File, S3StorageConfig } from '@prisma/client'
 import type { Response } from 'express'
@@ -109,6 +109,17 @@ export async function completeS3MultipartUpload(config: S3Config, key: string, u
     MultipartUpload: { Parts: parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })) },
   }))
   return parts.reduce((sum, part) => sum + BigInt(part.size), 0n)
+}
+
+// Incomplete multipart uploads still count as stored data until aborted (aborting is free on R2).
+export async function abortS3MultipartUpload(config: S3Config, key: string, uploadId: string) {
+  const client = createS3Client(config)
+  await client.send(new AbortMultipartUploadCommand({ Bucket: config.bucket, Key: key, UploadId: uploadId }))
+}
+
+export async function deleteS3ObjectByKey(config: S3Config, key: string) {
+  const client = createS3Client(config)
+  await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }))
 }
 
 export async function deleteS3Object(file: FileWithAccount) {

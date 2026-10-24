@@ -3,7 +3,7 @@ import { google } from 'googleapis'
 import { z } from 'zod'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
-import { getAuthedGoogleClient, syncGoogleQuota, ensureGoogleAppFolder } from '../google/google.service.js'
+import { getAuthedGoogleClient, ensureGoogleAppFolder } from '../google/google.service.js'
 import { createAuditLog } from '../../utils/audit.js'
 
 export const folderRouter = Router()
@@ -272,29 +272,39 @@ folderRouter.delete('/:id', async (req: AuthRequest, res, next) => {
       }
     }
 
+    // Files go to the app's Recycle Bin (restorable, removed from storage only when emptied there), same as deleting
+    // a single file. Google files are first moved out of the folder's Drive folder, because trashing that Drive
+    // folder would also trash everything inside it. S3/R2 files need no storage change here.
     const files = await prisma.file.findMany({ where: { userId: req.user!.id, status: 'active', folderId: { in: [...folderIds] } }, include: { connectedAccount: true } })
-    const syncedAccountIds = new Set<string>()
+    const appFolderIds = new Map<string, string>()
+    const accountsWithFailedMoves = new Set<string>()
     for (const file of files) {
+      if (file.provider !== 'google_drive') continue
       try {
         const auth = await getAuthedGoogleClient(file.connectedAccount)
         const drive = google.drive({ version: 'v3', auth })
-        // Move to Google Drive trash (recoverable for 30 days) instead of deleting permanently.
-        await drive.files.update({ fileId: file.providerFileId, requestBody: { trashed: true } })
-        syncedAccountIds.add(file.connectedAccountId)
-      } catch {
-        // Keep going so one failure does not block the whole deletion
+        let appFolderId = appFolderIds.get(file.connectedAccountId)
+        if (!appFolderId) {
+          appFolderId = await ensureGoogleAppFolder(file.connectedAccount)
+          appFolderIds.set(file.connectedAccountId, appFolderId)
+        }
+        const info = await drive.files.get({ fileId: file.providerFileId, fields: 'parents' })
+        const otherParents = (info.data.parents ?? []).filter((parent) => parent !== appFolderId)
+        if (otherParents.length > 0) await drive.files.update({ fileId: file.providerFileId, addParents: appFolderId, removeParents: otherParents.join(','), fields: 'id' })
+      } catch (error) {
+        accountsWithFailedMoves.add(file.connectedAccountId)
+        console.error(`Failed to move file ${file.id} out of deleted folder:`, error instanceof Error ? error.message : error)
       }
     }
 
-    // Delete folders on Google Drive
+    // Trash the (now empty) Drive folders; skipped for an account where a file could not be moved out.
     const foldersToDelete = await prisma.folder.findMany({ where: { id: { in: [...folderIds] }, userId: req.user!.id }, include: { connectedAccount: true } })
     for (const f of foldersToDelete) {
-      if (f.providerFolderId && f.connectedAccount) {
+      if (f.providerFolderId && f.connectedAccount && f.connectedAccountId && !accountsWithFailedMoves.has(f.connectedAccountId)) {
         try {
           const auth = await getAuthedGoogleClient(f.connectedAccount)
           const drive = google.drive({ version: 'v3', auth })
           await drive.files.update({ fileId: f.providerFolderId, requestBody: { trashed: true } })
-          if (f.connectedAccountId) syncedAccountIds.add(f.connectedAccountId)
         } catch {
           // ignore
         }
@@ -303,7 +313,6 @@ folderRouter.delete('/:id', async (req: AuthRequest, res, next) => {
 
     await prisma.file.updateMany({ where: { id: { in: files.map((file) => file.id) } }, data: { status: 'deleted', deletedAt: new Date() } })
     await prisma.folder.updateMany({ where: { id: { in: [...folderIds] }, userId: req.user!.id }, data: { deletedAt: new Date() } })
-    for (const accountId of syncedAccountIds) await syncGoogleQuota(accountId).catch(() => undefined)
 
     await createAuditLog(req.user!.id, 'DELETE_FOLDER', 'folder', root.id, { name: root.name })
     return res.json({ status: 'ok' })

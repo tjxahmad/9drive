@@ -176,8 +176,9 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
   const folderIdMap = new Map(userFolders.map((f) => [f.providerFolderId, f.id]))
 
   for (const driveFile of driveFiles) {
-    const dbFolderId = driveFile.parentId === appFolderId ? null : (folderIdMap.get(driveFile.parentId) ?? null)
     const existing = existingByProviderId.get(driveFile.id)
+    // Files in the 9drive root keep the virtual folder chosen in the app (moves in the app don't move the Drive file).
+    const dbFolderId = driveFile.parentId === appFolderId ? (existing?.folderId ?? null) : (folderIdMap.get(driveFile.parentId) ?? null)
     if (!existing) {
       await prisma.file.create({
         data: { userId, connectedAccountId: account.id, provider: 'google_drive', providerFileId: driveFile.id, name: driveFile.name, mimeType: driveFile.mimeType, sizeBytes: driveFile.sizeBytes, status: 'active', folderId: dbFolderId },
@@ -185,6 +186,9 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
       created += 1
       continue
     }
+
+    // Files in the app's Recycle Bin stay there; Sync must not bring them back.
+    if (existing.status === 'deleted') continue
 
     const needsUpdate = existing.name !== driveFile.name || existing.mimeType !== driveFile.mimeType || existing.sizeBytes !== driveFile.sizeBytes || existing.status !== 'active' || existing.deletedAt !== null || existing.folderId !== dbFolderId
     if (needsUpdate) {

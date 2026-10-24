@@ -8,7 +8,7 @@ import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { ensureGoogleAppFolder, getAuthedGoogleClient, syncGoogleQuota } from '../google/google.service.js'
-import { buildS3ObjectKey, completeS3MultipartUpload, createS3MultipartUpload, getS3ConfigForAccount, listS3UploadedParts, S3_PART_SIZE, syncS3Quota, uploadS3Object, uploadS3Part } from '../s3/s3.service.js'
+import { abortS3MultipartUpload, buildS3ObjectKey, completeS3MultipartUpload, createS3MultipartUpload, deleteS3ObjectByKey, getS3ConfigForAccount, listS3UploadedParts, S3_PART_SIZE, syncS3Quota, uploadS3Object, uploadS3Part } from '../s3/s3.service.js'
 import { createAuditLog } from '../../utils/audit.js'
 
 export const uploadRouter = Router()
@@ -25,6 +25,30 @@ function syncQuotaInBackground(accountId: string, sessionId: string) {
   syncGoogleQuota(accountId)
     .then(() => logUpload('quota sync completed', { accountId, sessionId }))
     .catch((error) => logUpload('quota sync failed', { accountId, sessionId, message: error instanceof Error ? error.message : 'Unknown error' }))
+}
+
+const STALE_S3_UPLOAD_MS = 24 * 60 * 60 * 1000
+
+// Bytes of S3/R2 uploads still in progress, per account. Their parts already count as stored data,
+// so they are reserved when choosing an account. Uploads abandoned for 24 hours are aborted.
+async function pendingS3UploadBytes(userId: string) {
+  const sessions = await prisma.uploadSession.findMany({ where: { userId, status: 'uploading', s3UploadId: { not: null } } })
+  const pending = new Map<string, bigint>()
+  for (const session of sessions) {
+    if (!session.targetConnectedAccountId || !session.s3UploadId) continue
+    if (session.createdAt.getTime() < Date.now() - STALE_S3_UPLOAD_MS) {
+      try {
+        const config = await getS3ConfigForAccount(session.targetConnectedAccountId, userId)
+        await abortS3MultipartUpload(config, buildS3ObjectKey(config, userId, session.id, session.fileName), session.s3UploadId)
+      } catch (error) {
+        logUpload('stale multipart abort failed', { sessionId: session.id, message: error instanceof Error ? error.message : 'Unknown error' })
+      }
+      await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'failed', errorMessage: 'Abandoned upload aborted.' } })
+      continue
+    }
+    pending.set(session.targetConnectedAccountId, (pending.get(session.targetConnectedAccountId) ?? 0n) + session.sizeBytes)
+  }
+  return pending
 }
 
 // Reads one upload chunk into memory, refusing bodies larger than the declared size.
@@ -55,7 +79,10 @@ function byPriority<T extends { account: { id: string; createdAt: Date } }>(item
   })
 }
 
-async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByAccount = new Map<string, bigint>(), targetAccountId?: string | null) {
+// targetAccountId: the user picked this account explicitly, so use it or fail.
+// preferredAccountId: the folder's account; used when it has room, otherwise any account with space is chosen,
+// so a folder never stops uploads once its first account is full.
+async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByAccount = new Map<string, bigint>(), targetAccountId?: string | null, preferredAccountId?: string | null) {
   const accounts = await prisma.connectedAccount.findMany({
     where: { userId, provider: { in: ['google_drive', 's3'] }, status: 'connected', ...(targetAccountId ? { id: targetAccountId } : {}) },
     include: { storageAccount: true },
@@ -93,6 +120,9 @@ async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByA
     const target = eligible.find(e => e.account.id === targetAccountId)
     return target?.account ?? null
   }
+
+  const preferred = preferredAccountId ? eligible.find(e => e.account.id === preferredAccountId) : undefined
+  if (preferred) return preferred.account
 
   const policy = await prisma.uploadRoutingPolicy.upsert({ where: { userId }, create: { userId, mode: 'most_available', priorityAccountIds: [] }, update: {} })
   const mode = (['most_available', 'round_robin', 'priority'].includes(policy.mode) ? policy.mode : 'most_available') as RoutingMode
@@ -172,15 +202,9 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
         }
 
         const folderId = meta.folderId || null
-        let targetAccountId: string | undefined = undefined
-        if (folderId) {
-          const folderRecord = await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } })
-          if (folderRecord.connectedAccountId) {
-            targetAccountId = folderRecord.connectedAccountId
-          }
-        }
+        const folderRecord = folderId ? await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } }) : null
 
-        const account = await selectAccount(req.user!.id, meta.sizeBytes, reservedBytesByAccount, targetAccountId)
+        const account = await selectAccount(req.user!.id, meta.sizeBytes, reservedBytesByAccount, undefined, folderRecord?.connectedAccountId)
         if (!account) {
           fileStream.resume()
           failed.push({ fileName, code: 'NO_ACCOUNT_WITH_ENOUGH_SPACE', message: 'No connected storage account has enough space for this upload.' })
@@ -220,13 +244,8 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
           const auth = await getAuthedGoogleClient(account)
           const drive = google.drive({ version: 'v3', auth })
           const appFolderId = await ensureGoogleAppFolder(account)
-          let targetParentId = appFolderId
-          if (folderId) {
-            const folderRecord = await prisma.folder.findFirst({ where: { id: folderId, userId: req.user!.id } })
-            if (folderRecord?.providerFolderId) {
-              targetParentId = folderRecord.providerFolderId
-            }
-          }
+          // The folder's Drive folder only exists in its own account; other accounts get the file in their 9drive folder.
+          const targetParentId = folderRecord?.providerFolderId && folderRecord.connectedAccountId === account.id ? folderRecord.providerFolderId : appFolderId
           const uploaded = await drive.files.create({
             requestBody: { name: fileName, parents: [targetParentId] },
             media: { mimeType: meta.mimeType, body: Readable.from(fileBuffer) },
@@ -240,7 +259,11 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
         }
 
         if (streamedBytes !== meta.sizeBytes) {
-          if (s3FileId) await prisma.file.update({ where: { id: s3FileId }, data: { status: 'deleted', deletedAt: new Date() } }).catch(() => undefined)
+          if (s3FileId) {
+            await prisma.file.update({ where: { id: s3FileId }, data: { status: 'deleted', deletedAt: new Date() } }).catch(() => undefined)
+            const config = await getS3ConfigForAccount(account.id, req.user!.id)
+            await deleteS3ObjectByKey(config, providerFileId).catch(() => undefined)
+          }
           await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'failed', errorMessage: 'Streamed byte count did not match declared size.' } })
           failed.push({ fileName, code: 'UPLOAD_SIZE_MISMATCH', message: 'Streamed byte count did not match declared size.' })
           return
@@ -321,15 +344,9 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
     if (sizeBytes > BigInt(env.MAX_UPLOAD_BYTES)) return res.status(400).json({ code: 'UPLOAD_TOO_LARGE', message: 'File exceeds max upload size.' })
 
     const folderId = body.folderId || null
-    let targetAccountId = body.targetAccountId
-    if (folderId) {
-      const folderRecord = await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } })
-      if (folderRecord.connectedAccountId) {
-        targetAccountId = folderRecord.connectedAccountId
-      }
-    }
+    const folderRecord = folderId ? await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } }) : null
 
-    const account = await selectAccount(req.user!.id, sizeBytes, undefined, targetAccountId)
+    const account = await selectAccount(req.user!.id, sizeBytes, await pendingS3UploadBytes(req.user!.id), body.targetAccountId, folderRecord?.connectedAccountId)
     if (!account) return res.status(400).json({ code: 'NO_ACCOUNT_WITH_ENOUGH_SPACE', message: 'No connected storage account has enough space.' })
 
     if (account.provider === 's3') {
@@ -357,13 +374,8 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
 
     const auth = await getAuthedGoogleClient(account)
     const appFolderId = await ensureGoogleAppFolder(account)
-    let targetParentId = appFolderId
-    if (folderId) {
-      const folderRecord = await prisma.folder.findFirst({ where: { id: folderId, userId: req.user!.id } })
-      if (folderRecord?.providerFolderId) {
-        targetParentId = folderRecord.providerFolderId
-      }
-    }
+    // The folder's Drive folder only exists in its own account; other accounts get the file in their 9drive folder.
+    const targetParentId = folderRecord?.providerFolderId && folderRecord.connectedAccountId === account.id ? folderRecord.providerFolderId : appFolderId
 
     // Initiate Google Drive Resumable Session
     const headers = new Headers()
@@ -507,6 +519,8 @@ uploadRouter.put('/resumable/chunk/:id', requireAuth, async (req: AuthRequest, r
 
       const uploadedBytes = await completeS3MultipartUpload(config, key, session.s3UploadId)
       if (uploadedBytes !== totalBytes) {
+        // Remove the bad object so it does not use storage without a file record.
+        await deleteS3ObjectByKey(config, key).catch(() => undefined)
         await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'failed', errorMessage: 'Uploaded size did not match declared size.' } })
         return res.status(400).json({ code: 'UPLOAD_SIZE_MISMATCH', message: 'Uploaded size did not match declared size.' })
       }
