@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
+import { HttpError } from '../../middleware/error.middleware.js'
 import { decryptText, encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { findOrCreateOwnerForGoogle } from '../../utils/owner.js'
 import { createOAuthClient, syncGoogleQuota } from '../google/google.service.js'
@@ -66,7 +67,8 @@ async function createGoogleConnectUrl(req: AuthRequest) {
   const query = z.object({ providerConfigId: z.string().min(1).optional() }).parse(req.query)
   const config = query.providerConfigId
     ? await prisma.providerConfig.findFirstOrThrow({ where: { id: query.providerConfigId, OR: [{ userId: req.user!.id }, { userId: null }], provider: 'google_drive', status: 'active' } })
-    : await prisma.providerConfig.findFirstOrThrow({ where: { userId: null, provider: 'google_drive', status: 'active' }, orderBy: { createdAt: 'desc' } })
+    : await prisma.providerConfig.findFirst({ where: { userId: null, provider: 'google_drive', status: 'active' }, orderBy: { createdAt: 'desc' } })
+  if (!config) throw new HttpError(400, 'GOOGLE_NOT_CONFIGURED', 'Google is not set up yet. Add your Google OAuth Client ID and Secret in Settings first.')
   const state = randomToken()
   await prisma.oauthState.create({ data: { userId: req.user!.id, providerConfigId: config.id, flow: 'connect', stateHash: hashToken(state), expiresAt: new Date(Date.now() + 10 * 60_000) } })
   const client = createOAuthClient(config)

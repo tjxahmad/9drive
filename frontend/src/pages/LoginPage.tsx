@@ -57,10 +57,10 @@ export function LoginPage() {
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-700 text-white shadow-[0_0_24px_rgba(220,38,38,0.45)]"><HardDrive className="h-6 w-6" /></div>
           <div><h1 className="text-2xl font-extrabold">Login</h1><p className="text-sm text-slate-500">Access your 9Drive gateway.</p></div>
         </div>
-        <form onSubmit={submit} className="mt-6 grid gap-4">
+        <form onSubmit={submit} className="mt-6 grid min-w-0 gap-4">
           <label className="grid gap-2 text-sm font-semibold">Email<Input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="border-white/15 bg-white/5" /></label>
           <label className="grid gap-2 text-sm font-semibold">Password<Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required className="border-white/15 bg-white/5" /></label>
-          {error ? <p role="alert" className="rounded-xl border border-red-500/30 bg-red-950/60 p-3 text-sm">{error}</p> : null}
+          {error ? <p role="alert" className="rounded-xl border border-red-500/30 bg-red-950/60 p-3 text-sm [overflow-wrap:anywhere]">{error}</p> : null}
           <Button disabled={loading} className="bg-red-700 text-white shadow-[0_8px_24px_rgba(220,38,38,0.35)] hover:bg-red-600 focus-visible:ring-red-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#120608]">{loading ? 'Logging in...' : 'Login'}</Button>
         </form>
         <div className="mt-4 grid gap-3">

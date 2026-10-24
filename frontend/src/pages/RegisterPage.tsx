@@ -103,7 +103,7 @@ export function RegisterPage() {
           <label className="grid gap-2 text-sm font-semibold">Email<Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
           <label className="grid gap-2 text-sm font-semibold">Password<Input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
           {recaptchaSiteKey ? <div className="min-h-[78px] overflow-hidden rounded-xl bg-slate-50 p-2"><div ref={recaptchaRef} /></div> : null}
-          {error ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-600">{error}</p> : null}
+          {error ? <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-600 [overflow-wrap:anywhere]">{error}</p> : null}
           <Button disabled={loading}>{loading ? 'Creating...' : 'Create Account'}</Button>
         </form>
         <div className="mt-4 grid gap-3">
