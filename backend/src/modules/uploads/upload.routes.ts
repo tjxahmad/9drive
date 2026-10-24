@@ -10,6 +10,7 @@ import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.
 import { ensureGoogleAppFolder, getAuthedGoogleClient, syncGoogleQuota } from '../google/google.service.js'
 import { abortS3MultipartUpload, buildS3ObjectKey, completeS3MultipartUpload, createS3MultipartUpload, deleteS3ObjectByKey, getS3ConfigForAccount, listS3UploadedParts, S3_PART_SIZE, syncS3Quota, uploadS3Object, uploadS3Part } from '../s3/s3.service.js'
 import { createAuditLog } from '../../utils/audit.js'
+import { getLockState, isFolderBlocked, sendFolderLocked } from '../folders/folder-lock.js'
 
 export const uploadRouter = Router()
 
@@ -232,6 +233,12 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
 
         const folderId = meta.folderId || null
         const folderRecord = folderId ? await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } }) : null
+        // API-key uploads can't unlock folders, so locked folders refuse them.
+        if (folderId && isFolderBlocked(await getLockState(req), folderId)) {
+          fileStream.resume()
+          failed.push({ fileName, code: 'FOLDER_LOCKED', message: 'The target folder is locked.' })
+          return
+        }
 
         const account = await selectAccount(req.user!.id, meta.sizeBytes, reservedBytesByAccount)
         if (!account) {
@@ -374,6 +381,10 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
 
     const folderId = body.folderId || null
     const folderRecord = folderId ? await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } }) : null
+    if (folderId) {
+      const lockState = await getLockState(req)
+      if (isFolderBlocked(lockState, folderId)) return sendFolderLocked(res, lockState, folderId)
+    }
 
     // Finished Google uploads are reserved only to spread files while Google's numbers catch up. When nothing fits with
     // them (accounts nearly full), Google may already count those files, so check again without them; Google itself

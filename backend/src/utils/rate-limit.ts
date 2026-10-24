@@ -16,3 +16,9 @@ export function isRateLimited(key: string, limit: number, windowMs: number) {
   bucket.count += 1
   return bucket.count > limit
 }
+
+// For limits on failed attempts only: checks without counting (count failures with isRateLimited).
+export function hasReachedLimit(key: string, limit: number) {
+  const bucket = buckets.get(key)
+  return Boolean(bucket && bucket.resetAt > Date.now() && bucket.count >= limit)
+}

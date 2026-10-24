@@ -14,6 +14,13 @@ Security and privacy:
 - The API listens on `127.0.0.1` by default (`HOST`), Docker ports are bound to localhost, placeholder secrets are rejected, JWTs are pinned to HS256, login/register are rate limited, and internal database errors are no longer sent to the browser.
 - No data sent to third parties: Office previews use Google Drive's own viewer instead of Microsoft's, avatars are generated locally instead of Gravatar/DiceBear, and the Plyr CDN files are loaded with Subresource Integrity.
 - OAuth errors are logged without client secrets; Google sign-in requires a verified email; dependencies updated with `npm audit fix`.
+- Folder locks: any folder can get its own password. A locked folder, its subfolders and their files can't be listed, searched, previewed, downloaded, moved or uploaded into until the password is entered; the app forgets the unlock when you leave the folder, close the app or stay idle for 15 minutes. Removing a lock (also when its password is forgotten) needs the 9Drive account password. Wrong passwords are rate limited. The lock is inside 9Drive only: the files are still visible in the storage account itself.
+- The Activity Log records every preview and download (file, ZIP, folder) with its time, and folder lock events; names of items inside locked folders are hidden there while locked.
+
+Downloads:
+
+- Downloads stream straight to disk through short-lived links with the browser's own progress bar (before, a big video was first loaded into page memory and nothing seemed to happen for minutes).
+- Download a folder as one ZIP (subfolders kept; streamed, ZIP64 for big files) or as a normal folder saved where you choose (desktop Chrome/Edge; phones get one download per file).
 
 Storage:
 

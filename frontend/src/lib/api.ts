@@ -1,4 +1,5 @@
 import { clearAuthSession, getAccessToken, getRefreshToken, setAccessToken } from '@/lib/auth'
+import { folderUnlockHeader, FolderLockedError } from '@/lib/folderLocks'
 
 const isProd = import.meta.env.PROD
 const rawApiUrl = import.meta.env.VITE_API_URL
@@ -28,6 +29,8 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
   const token = getAccessToken()
   if (!options.skipAuth && token) headers.set('Authorization', `Bearer ${token}`)
   if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const unlocks = folderUnlockHeader()
+  if (unlocks && !headers.has('X-Folder-Unlock')) headers.set('X-Folder-Unlock', unlocks)
 
   const response = await fetch(`${API_URL}${path}`, { ...options, headers })
   if (response.status === 401 && options.retry !== false && !options.skipAuth && await refreshAccessToken()) {
@@ -37,6 +40,7 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }))
     if (response.status === 401) clearAuthSession()
+    if (response.status === 423) throw new FolderLockedError(error.message ?? 'This folder is locked.', error.lockedFolderId ?? null, error.lockedFolderName ?? null)
     throw new Error(error.message ?? 'Request failed')
   }
 

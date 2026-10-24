@@ -1,5 +1,6 @@
 import { API_URL, refreshAccessToken } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
+import { withFolderUnlocks } from '@/lib/folderLocks'
 
 // Thumbnails are fetched with the login token (an <img> tag can't send it), kept as object URLs for the session,
 // and loaded at most a few at a time so a big folder doesn't flood the connection.
@@ -22,7 +23,7 @@ async function withSlot<T>(task: () => Promise<T>) {
 }
 
 async function fetchThumbnail(fileId: string) {
-  const request = () => fetch(`${API_URL}/files/${fileId}/thumbnail`, { headers: { Authorization: `Bearer ${getAccessToken()}` } })
+  const request = () => fetch(`${API_URL}/files/${fileId}/thumbnail`, { headers: withFolderUnlocks({ Authorization: `Bearer ${getAccessToken()}` }) })
   let response = await request()
   if (response.status === 401 && await refreshAccessToken()) response = await request()
   if (!response.ok) return null

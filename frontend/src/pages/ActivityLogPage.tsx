@@ -9,7 +9,9 @@ import {
   FileText,
   Download,
   AlertTriangle,
-  Move
+  Move,
+  Eye,
+  Lock
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { PageHeader } from '@/components/drive/PageHeader'
@@ -25,10 +27,37 @@ type AuditLog = {
   createdAt: string
 }
 
+const actionLabels: Record<string, string> = {
+  PREVIEW_FILE: 'Previewed',
+  DOWNLOAD_FILE: 'Downloaded',
+  DOWNLOAD_ZIP: 'Downloaded as ZIP',
+  DOWNLOAD_FOLDER: 'Downloaded folder',
+  LOCK_FOLDER: 'Locked folder',
+  UNLOCK_FOLDER: 'Opened locked folder',
+  UNLOCK_FOLDER_FAILED: 'Wrong folder password',
+  CHANGE_FOLDER_LOCK: 'Changed folder password',
+  REMOVE_FOLDER_LOCK: 'Removed folder lock',
+  REMOVE_FOLDER_LOCK_FAILED: 'Wrong account password',
+}
+
+type ActivityFilter = 'all' | 'views' | 'locks'
+const activityFilters: Array<{ value: ActivityFilter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'views', label: 'Previews & downloads' },
+  { value: 'locks', label: 'Folder locks' },
+]
+
+function matchesFilter(action: string, filter: ActivityFilter) {
+  if (filter === 'views') return action.startsWith('PREVIEW') || action.startsWith('DOWNLOAD')
+  if (filter === 'locks') return action.includes('LOCK')
+  return true
+}
+
 export function ActivityLogPage() {
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [filter, setFilter] = useState<ActivityFilter>('all')
 
   async function loadLogs() {
     setLoading(true)
@@ -49,45 +78,60 @@ export function ActivityLogPage() {
 
   function getActionBadge(action: string) {
     const act = action.toUpperCase()
-    if (act.includes('CREATE') || act.includes('UPLOAD')) {
+    const label = actionLabels[act] ?? action.replace(/_/g, ' ')
+    if (act.includes('LOCK')) {
       return {
-        bg: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
-        icon: Plus,
-        label: action.replace(/_/g, ' ')
+        bg: act.endsWith('FAILED') ? 'bg-rose-500/10 text-rose-600 border-rose-500/20' : 'bg-amber-500/10 text-amber-700 border-amber-500/20',
+        icon: Lock,
+        label
       }
     }
-    if (act.includes('DELETE') || act.includes('PERMANENT') || act.includes('TRASH')) {
+    if (act.includes('PREVIEW')) {
       return {
-        bg: 'bg-rose-500/10 text-rose-600 border-rose-500/20',
-        icon: Trash2,
-        label: action.replace(/_/g, ' ')
-      }
-    }
-    if (act.includes('RESTORE') || act.includes('SYNC')) {
-      return {
-        bg: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
-        icon: RefreshCw,
-        label: action.replace(/_/g, ' ')
-      }
-    }
-    if (act.includes('MOVE')) {
-      return {
-        bg: 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20',
-        icon: Move,
-        label: action.replace(/_/g, ' ')
+        bg: 'bg-violet-500/10 text-violet-600 border-violet-500/20',
+        icon: Eye,
+        label
       }
     }
     if (act.includes('DOWNLOAD')) {
       return {
         bg: 'bg-blue-500/10 text-blue-600 border-blue-500/20',
         icon: Download,
-        label: action.replace(/_/g, ' ')
+        label
+      }
+    }
+    if (act.includes('CREATE') || act.includes('UPLOAD')) {
+      return {
+        bg: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
+        icon: Plus,
+        label
+      }
+    }
+    if (act.includes('DELETE') || act.includes('PERMANENT') || act.includes('TRASH')) {
+      return {
+        bg: 'bg-rose-500/10 text-rose-600 border-rose-500/20',
+        icon: Trash2,
+        label
+      }
+    }
+    if (act.includes('RESTORE') || act.includes('SYNC')) {
+      return {
+        bg: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+        icon: RefreshCw,
+        label
+      }
+    }
+    if (act.includes('MOVE')) {
+      return {
+        bg: 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20',
+        icon: Move,
+        label
       }
     }
     return {
       bg: 'bg-slate-500/10 text-slate-600 border-slate-500/20',
       icon: History,
-      label: action.replace(/_/g, ' ')
+      label
     }
   }
 
@@ -111,7 +155,10 @@ export function ActivityLogPage() {
     if (parsed.name) parts.push(`Name: ${parsed.name}`)
     if (parsed.fileName) parts.push(`File: ${parsed.fileName}`)
     if (parsed.folderName) parts.push(`Folder: ${parsed.folderName}`)
+    if (Array.isArray(parsed.names) && parsed.names.length) parts.push(`Files: ${parsed.names.join(', ')}${parsed.count > parsed.names.length ? ` and ${parsed.count - parsed.names.length} more` : ''}`)
+    if (parsed.mode) parts.push(`As: ${parsed.mode}`)
     if (parsed.count !== undefined) parts.push(`Count: ${parsed.count}`)
+    if (parsed.lockedSubfolders) parts.push(`Locked folders left out: ${parsed.lockedSubfolders}`)
     if (parsed.sizeBytes !== undefined) {
       const bytes = Number(parsed.sizeBytes)
       parts.push(`Size: ${formatBytes(bytes)}`)
@@ -147,11 +194,18 @@ export function ActivityLogPage() {
       )}
 
       <Card className="mt-8 overflow-hidden border border-slate-200 bg-white shadow-xl shadow-slate-900/5">
-        <div className="border-b border-slate-100 bg-slate-50/50 px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/50 px-6 py-4 dark:border-slate-800 dark:bg-slate-900/40">
           <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
             <History className="h-5 w-5 text-slate-500" />
             Recent Activity Trail
           </h2>
+          <div className="flex flex-wrap gap-0.5 rounded-xl border border-slate-200 bg-slate-50 p-0.5 dark:border-slate-700" role="group" aria-label="Show activity">
+            {activityFilters.map((option) => (
+              <button key={option.value} type="button" onClick={() => setFilter(option.value)} aria-pressed={filter === option.value} className={cn('rounded-lg border border-transparent px-3 py-1.5 text-xs font-bold transition', filter === option.value ? 'bg-white text-slate-800 shadow-sm dark:border-blue-500/30 dark:bg-blue-500/20 dark:text-blue-300' : 'text-slate-400 hover:text-slate-600')}>
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="divide-y divide-slate-100">
@@ -160,14 +214,14 @@ export function ActivityLogPage() {
               <RefreshCw className="h-8 w-8 animate-spin text-blue-600 mb-2" />
               <p className="text-sm">Loading activity logs...</p>
             </div>
-          ) : logs.length === 0 ? (
+          ) : logs.filter((log) => matchesFilter(log.action, filter)).length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-slate-400">
               <History className="h-12 w-12 stroke-[1.5] mb-3 text-slate-300" />
               <p className="font-semibold text-slate-600">No activity yet</p>
               <p className="text-sm text-slate-400 mt-1">Actions you perform on your folders and files will appear here.</p>
             </div>
           ) : (
-            logs.map((log) => {
+            logs.filter((log) => matchesFilter(log.action, filter)).map((log) => {
               const badge = getActionBadge(log.action)
               const EntityIcon = log.entityType === 'folder' ? Folder : FileText
 

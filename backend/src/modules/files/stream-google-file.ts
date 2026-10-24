@@ -4,6 +4,7 @@ import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import type { ConnectedAccount, File } from '@prisma/client'
 import { getAuthedGoogleClient } from '../google/google.service.js'
+import { contentDisposition } from '../../utils/content-disposition.js'
 
 type FileWithAccount = File & { connectedAccount: ConnectedAccount }
 type StreamOptions = { disposition?: 'inline' | 'attachment' }
@@ -18,10 +19,6 @@ export const googleDownloadExportMimeTypes: Record<string, { mimeType: string; e
 const googlePreviewExportMimeTypes: Record<string, { mimeType: string; extension: string }> = {
   ...googleDownloadExportMimeTypes,
   'application/vnd.google-apps.spreadsheet': { mimeType: 'application/pdf', extension: '.pdf' },
-}
-
-function contentDisposition(type: 'inline' | 'attachment', fileName: string) {
-  return `${type}; filename="${fileName.replaceAll('"', '')}"`
 }
 
 export function withExtension(fileName: string, extension: string) {

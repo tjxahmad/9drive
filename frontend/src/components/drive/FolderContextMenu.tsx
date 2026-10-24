@@ -1,4 +1,4 @@
-import { Copy, Edit3, FolderOpen, Scissors, Trash2, UserPlus } from 'lucide-react'
+import { Copy, Download, Edit3, FolderDown, FolderOpen, KeyRound, Lock, LockOpen, Scissors, Trash2, UserPlus } from 'lucide-react'
 import type { FolderItem } from '@/data/drive-data'
 
 type Props = {
@@ -11,6 +11,11 @@ type Props = {
   onInvite: () => void
   onCopyLink: () => void
   onDelete: () => void
+  onDownloadZip: () => void
+  onDownloadFolder: () => void
+  onLock: () => void
+  onChangeLock: () => void
+  onRemoveLock: () => void
 }
 
 function MenuItem({ icon: Icon, label, onClick, danger = false, kbd }: { icon: React.ElementType; label: string; onClick: () => void; danger?: boolean; kbd?: string }) {
@@ -43,10 +48,10 @@ function MenuItem({ icon: Icon, label, onClick, danger = false, kbd }: { icon: R
   )
 }
 
-export function FolderContextMenu({ x, y, folder, onClose, onCut, onRename, onInvite, onCopyLink, onDelete }: Props) {
+export function FolderContextMenu({ x, y, folder, onClose, onCut, onRename, onInvite, onCopyLink, onDelete, onDownloadZip, onDownloadFolder, onLock, onChangeLock, onRemoveLock }: Props) {
   if (!folder) return null
-  const safeX = Math.max(12, Math.min(x, window.innerWidth - 228))
-  const safeY = Math.max(12, Math.min(y, window.innerHeight - 280))
+  const safeX = Math.max(12, Math.min(x, window.innerWidth - 236))
+  const safeY = Math.max(12, Math.min(y, window.innerHeight - 520))
 
   return (
     <>
@@ -56,7 +61,7 @@ export function FolderContextMenu({ x, y, folder, onClose, onCut, onRename, onIn
         onClick={onClose}
       />
       <div
-        className="fixed z-50 w-56 overflow-hidden rounded-2xl border border-slate-200/70 bg-white/95 shadow-2xl shadow-slate-950/15 backdrop-blur-2xl dark:border-slate-800/70 dark:bg-slate-900/95"
+        className="fixed z-50 max-h-[calc(100vh-1.5rem)] w-56 overflow-y-auto rounded-2xl border border-slate-200/70 bg-white/95 shadow-2xl shadow-slate-950/15 backdrop-blur-2xl dark:border-slate-800/70 dark:bg-slate-900/95"
         style={
           window.innerWidth >= 640
             ? { left: safeX, top: safeY }
@@ -71,7 +76,7 @@ export function FolderContextMenu({ x, y, folder, onClose, onCut, onRename, onIn
             </span>
             <div className="min-w-0">
               <p className="truncate text-[13px] font-bold leading-tight text-slate-900 dark:text-slate-100">{folder.name}</p>
-              <p className="text-[10px] font-medium text-slate-400 dark:text-slate-500">Virtual folder</p>
+              <p className="text-[10px] font-medium text-slate-400 dark:text-slate-500">{folder.locked ? 'Locked folder' : 'Virtual folder'}</p>
             </div>
           </div>
         </div>
@@ -82,6 +87,14 @@ export function FolderContextMenu({ x, y, folder, onClose, onCut, onRename, onIn
           <MenuItem icon={Scissors} label="Cut" onClick={onCut} kbd="⌘X" />
           <MenuItem icon={Edit3} label="Rename" onClick={onRename} />
           <MenuItem icon={UserPlus} label="Invite Member" onClick={onInvite} />
+          <div className="my-1 h-px bg-slate-100 dark:bg-slate-800" />
+          <MenuItem icon={Download} label="Download (ZIP)" onClick={onDownloadZip} />
+          <MenuItem icon={FolderDown} label="Download as folder" onClick={onDownloadFolder} />
+          <div className="my-1 h-px bg-slate-100 dark:bg-slate-800" />
+          {folder.locked ? <>
+            <MenuItem icon={KeyRound} label="Change lock password" onClick={onChangeLock} />
+            <MenuItem icon={LockOpen} label="Remove lock" onClick={onRemoveLock} />
+          </> : <MenuItem icon={Lock} label="Lock folder" onClick={onLock} />}
           <div className="my-1 h-px bg-slate-100 dark:bg-slate-800" />
           <MenuItem icon={Trash2} label="Delete Folder" onClick={onDelete} danger />
         </div>

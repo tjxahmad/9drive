@@ -1,6 +1,7 @@
 import { createContext, useContext, useRef, useState, type ReactNode } from 'react'
 import { API_URL, apiFetch, refreshAccessToken } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
+import { folderUnlockHeader } from '@/lib/folderLocks'
 
 export type UploadProgressStatus = 'uploading' | 'waiting' | 'done' | 'error' | 'partial'
 export type UploadProgressFile = { name: string; size: number; percent: number; status: UploadProgressStatus }
@@ -106,7 +107,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     })
   }
 
-  async function uploadSingleFileResumable(file: File, folderId: string | null, onProgress: (percent: number) => void, onWaiting: (waiting: boolean) => void, targetAccountId?: string | null) {
+  // unlockHeader: the folder unlocks from when the upload started, so files bound for a locked folder keep going
+  // even if the user leaves that folder (which locks it again in the app) while the upload is still running.
+  async function uploadSingleFileResumable(file: File, folderId: string | null, onProgress: (percent: number) => void, onWaiting: (waiting: boolean) => void, targetAccountId?: string | null, unlockHeader = folderUnlockHeader()) {
     setResumableSessions(prev => ({ ...prev, [file.name]: { file, folderId, targetAccountId } }))
     const key = pendingUploadKey(file, folderId)
     const percentOf = (offset: number) => Math.min(99, Math.round((offset / file.size) * 100))
@@ -127,6 +130,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     if (!sessionId) {
       const initData = await apiFetch<{ sessionId: string; provider: string }>('/uploads/resumable/init', {
         method: 'POST',
+        headers: unlockHeader ? { 'X-Folder-Unlock': unlockHeader } : undefined,
         body: JSON.stringify({
           fileName: file.name,
           mimeType: file.type || 'application/octet-stream',
@@ -180,6 +184,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       : { open: true, fileName: filesToUpload.length === 1 ? filesToUpload[0].name : `${filesToUpload.length} files`, percent: 0, status: 'uploading', files: newEntries })
 
     // Upload files sequentially
+    const unlockHeader = folderUnlockHeader()
     try {
       for (let i = 0; i < filesToUpload.length; i++) {
         const file = filesToUpload[i]
@@ -191,6 +196,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
             (filePercent) => setFileState(index, { percent: filePercent, status: filePercent >= 100 ? 'done' : 'uploading' }),
             (waiting) => setFileState(index, { status: waiting ? 'waiting' : 'uploading' }),
             targetAccountId,
+            unlockHeader,
           )
         } catch (err) {
           console.error('File upload failed:', file.name, err)

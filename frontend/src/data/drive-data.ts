@@ -6,6 +6,9 @@ export type FolderItem = {
   iconUrl?: string | null
   parentId?: string | null
   providerFolderId?: string | null
+  // Folder lock: locked = has its own password; unlocked = opened with it in this app session.
+  locked?: boolean
+  unlocked?: boolean
 }
 
 export type FileItem = {

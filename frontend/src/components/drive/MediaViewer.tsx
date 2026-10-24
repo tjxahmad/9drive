@@ -29,6 +29,9 @@ export function MediaViewer({ open, name, kind, url, loading, error, onClose, on
   const shellRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  // Big videos can take a few seconds before the first frame; say so instead of showing a black screen.
+  const [videoState, setVideoState] = useState<'loading' | 'ready' | 'failed'>('loading')
+  useEffect(() => { setVideoState('loading') }, [url])
   const canFullscreen = typeof document !== 'undefined' && Boolean(document.fullscreenEnabled)
 
   // Lock page scroll; Escape closes (the first Escape only leaves full screen).
@@ -98,9 +101,11 @@ export function MediaViewer({ open, name, kind, url, loading, error, onClose, on
         {!loading && error ? <p className="max-w-md px-6 text-center text-sm text-red-300">{error}</p> : null}
         {!loading && !error && url && kind === 'image' ? <img src={url} alt={name} draggable={false} className="max-h-full max-w-full select-none object-contain" /> : null}
         {!loading && !error && url && kind === 'video' ? (
-          <div className="media-viewer-video h-full w-full">
+          <div className="media-viewer-video relative h-full w-full">
             {/* No `type` attribute: browsers then try the file instead of skipping types like video/quicktime (.mov). */}
-            <video ref={videoRef} src={url} controls playsInline preload="metadata" className="h-full w-full" />
+            <video ref={videoRef} src={url} controls playsInline preload="metadata" className="h-full w-full" onLoadedData={() => setVideoState('ready')} onError={() => setVideoState('failed')} />
+            {videoState === 'loading' ? <p className="pointer-events-none absolute inset-x-0 top-1/2 text-center text-sm font-semibold text-white/80">Loading video...</p> : null}
+            {videoState === 'failed' ? <p className="absolute inset-x-0 top-1/2 px-6 text-center text-sm text-red-300">This video could not be played here. Use Download to open it on your device.</p> : null}
           </div>
         ) : null}
         {!loading && !error && url && kind === 'document' ? <iframe src={url} title={name} className="h-full w-full border-0 bg-white sm:rounded-xl" /> : null}

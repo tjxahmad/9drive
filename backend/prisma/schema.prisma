@@ -24,6 +24,7 @@ model User {
   files          File[]
   fileShares     FileShare[]
   filePreviewTokens FilePreviewToken[]
+  downloadTokens DownloadToken[]
   folders        Folder[]
   uploadSessions UploadSession[]
   auditLogs      AuditLog[]
@@ -268,6 +269,24 @@ model FilePreviewToken {
   @@map("file_preview_tokens")
 }
 
+// Short-lived link for a browser download (one file, or a ZIP of files or a folder), so big files stream straight
+// to disk instead of being held in page memory.
+model DownloadToken {
+  id        String   @id @default(uuid()) @db.Char(36)
+  userId    String   @map("user_id") @db.Char(36)
+  kind      String   @db.VarChar(16)
+  tokenHash String   @unique @map("token_hash") @db.VarChar(255)
+  fileIds   Json     @map("file_ids")
+  folderId  String?  @map("folder_id") @db.Char(36)
+  name      String   @db.VarChar(255)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("download_tokens")
+}
+
 model Folder {
   id                 String            @id @default(uuid()) @db.Char(36)
   userId             String            @map("user_id") @db.Char(36)
@@ -278,6 +297,9 @@ model Folder {
   name               String            @db.VarChar(255)
   color              String            @default("text-blue-500") @db.VarChar(64)
   iconUrl            String?           @map("icon_url") @db.Text
+  // Folder lock: argon2 hash of the folder's own password; lockedAt changes on every (re)lock and invalidates old unlocks.
+  lockHash           String?           @map("lock_hash") @db.VarChar(255)
+  lockedAt           DateTime?         @map("locked_at")
   createdAt          DateTime          @default(now()) @map("created_at")
   updatedAt          DateTime          @updatedAt @map("updated_at")
   deletedAt          DateTime?         @map("deleted_at")

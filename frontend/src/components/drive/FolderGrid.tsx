@@ -1,4 +1,4 @@
-import { MoreVertical } from 'lucide-react'
+import { Lock, LockOpen, MoreVertical } from 'lucide-react'
 import type { MouseEvent } from 'react'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -96,6 +96,11 @@ export function FolderGrid({
           >
             <MoreVertical className="h-4 w-4" />
           </button>
+          {folder.locked ? (
+            <span className="absolute left-2 top-2 flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600 sm:left-3 sm:top-3" title={folder.unlocked ? 'Locked folder (open now)' : 'Locked folder'} aria-label={folder.unlocked ? 'Locked folder, open now' : 'Locked folder'}>
+              {folder.unlocked ? <LockOpen className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+            </span>
+          ) : null}
           {folder.id && covers[folder.id]?.length ? (
             // Folder cover: up to 4 photos/videos from inside the folder, with the folder icon as a badge.
             <div className="relative mt-6 w-full">
