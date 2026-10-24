@@ -281,47 +281,9 @@ fileRouter.patch('/:id', async (req: AuthRequest, res, next) => {
   }
 })
 
-fileRouter.post('/:id/share', async (req: AuthRequest, res, next) => {
-  try {
-    const fileId = String(req.params.id)
-    const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id, status: 'active' } })
-    const existingShare = await prisma.fileShare.findFirst({ where: { fileId: file.id, userId: req.user!.id, enabled: true, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }, orderBy: { createdAt: 'desc' } })
-
-    let shareId = existingShare?.id
-    let token = existingShare?.token
-    if (!existingShare) {
-      token = randomToken(32)
-      const share = await prisma.fileShare.create({ data: { fileId: file.id, userId: req.user!.id, token, tokenHash: hashToken(token) } })
-      shareId = share.id
-    }
-
-    return res.status(existingShare ? 200 : 201).json({ url: `${env.FRONTEND_URL}/public/files/${token}`, shareId })
-  } catch (error) {
-    return next(error)
-  }
-})
-
-fileRouter.post('/:id/public-permission', requireAuth, async (req: AuthRequest, res, next) => {
-  try {
-    const fileId = String(req.params.id)
-    const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id }, include: { connectedAccount: true } })
-    if (file.provider !== 'google_drive') {
-      return res.status(400).json({ code: 'UNSUPPORTED_PROVIDER', message: 'Only Google Drive files can be made public.' })
-    }
-    const auth = await getAuthedGoogleClient(file.connectedAccount)
-    const drive = google.drive({ version: 'v3', auth })
-    await drive.permissions.create({
-      fileId: file.providerFileId,
-      requestBody: {
-        role: 'writer',
-        type: 'anyone'
-      }
-    })
-    const metadata = await drive.files.get({ fileId: file.providerFileId, fields: 'webViewLink,webContentLink' })
-    return res.json({ status: 'ok', url: metadata.data.webViewLink ?? metadata.data.webContentLink })
-  } catch (error: any) {
-    return res.status(500).json({ code: 'GOOGLE_API_ERROR', message: error.message || 'Failed to update Google Drive permissions.' })
-  }
+// Public share links and public Google Drive permissions are disabled: only the owner can read or write files.
+fileRouter.post('/:id/share', (_req, res) => {
+  return res.status(403).json({ code: 'SHARING_DISABLED', message: 'Public share links are disabled. Only the owner can access files.' })
 })
 
 fileRouter.delete('/:id/share', async (req: AuthRequest, res, next) => {
@@ -354,20 +316,7 @@ fileRouter.get('/:id/view-url', async (req: AuthRequest, res, next) => {
     if (file.provider === 's3') return res.json({ url: null })
     const auth = await getAuthedGoogleClient(file.connectedAccount)
     const drive = google.drive({ version: 'v3', auth })
-
-    // Automatically set permission to public writer when retrieving/copying the view URL!
-    try {
-      await drive.permissions.create({
-        fileId: file.providerFileId,
-        requestBody: {
-          role: 'writer',
-          type: 'anyone'
-        }
-      })
-    } catch (err: any) {
-      console.error('Failed to make Google Drive file public during view-url retrieval:', err.message || err)
-    }
-
+    // The Drive link stays private: it only opens for the Google account that owns the file.
     const metadata = await drive.files.get({ fileId: file.providerFileId, fields: 'webViewLink,webContentLink' })
     return res.json({ url: metadata.data.webViewLink ?? metadata.data.webContentLink })
   } catch (error) {

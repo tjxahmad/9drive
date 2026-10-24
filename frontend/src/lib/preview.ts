@@ -24,8 +24,12 @@ export function getPreviewKind(mimeType: string | undefined): PreviewKind | null
   return null
 }
 
-export function officeViewerUrl(fileUrl: string) {
-  return `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(fileUrl)}`
+// Google Drive's built-in viewer for Office files. It only opens for the Google account that owns the file.
+export function drivePreviewUrl(webViewLink: string, accountEmail?: string) {
+  const url = new URL(webViewLink.replace(/\/view(\?.*)?$/, '/preview'))
+  url.search = ''
+  if (accountEmail) url.searchParams.set('authuser', accountEmail)
+  return url.toString()
 }
 
 export function isSpreadsheetMimeType(mimeType: string | undefined) {

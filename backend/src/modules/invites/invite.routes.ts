@@ -6,6 +6,8 @@ import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.
 export const inviteRouter = Router()
 inviteRouter.use(requireAuth)
 
+const ALLOW_INVITES = false
+
 const inviteSchema = z.object({ email: z.string().email(), role: z.enum(['viewer', 'editor']).default('viewer'), targetType: z.enum(['file', 'folder']), targetId: z.string().min(1) })
 
 type InviteRecord = { id: string; inviterId: string; inviteeEmail: string; targetType: string; targetId: string; role: string; status: string; revokedAt: Date | null; acceptedAt: Date | null; createdAt: Date; updatedAt: Date }
@@ -70,6 +72,8 @@ inviteRouter.get('/', async (req: AuthRequest, res, next) => {
 
 inviteRouter.post('/', async (req: AuthRequest, res, next) => {
   try {
+    // Single-owner mode: nobody else can be given access to files or folders.
+    if (!ALLOW_INVITES) return res.status(403).json({ code: 'INVITES_DISABLED', message: 'Invites are disabled. Only the owner can access files.' })
     const body = inviteSchema.parse(req.body)
     const email = body.email.trim().toLowerCase()
     const inviter = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id }, select: { email: true } })

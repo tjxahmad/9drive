@@ -1,4 +1,4 @@
-import { google } from 'googleapis'
+import { google, type drive_v3 } from 'googleapis'
 import type { ConnectedAccount, ProviderConfig } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { decryptText, encryptText } from '../../utils/crypto.js'
@@ -95,6 +95,28 @@ export type GoogleAppFolderSyncResult = {
   created: number
   updated: number
   deleted: number
+  publicLinksRevoked: number
+  publicLinksRevokeFailed: number
+}
+
+// Removes "anyone with the link" and domain-wide permissions so a file or folder is only reachable by its owner.
+async function revokePublicPermissions(drive: drive_v3.Drive, fileIds: string[]) {
+  let revoked = 0
+  let failed = 0
+  for (const fileId of fileIds) {
+    try {
+      const response = await drive.permissions.list({ fileId, fields: 'permissions(id,type)' })
+      for (const permission of response.data.permissions ?? []) {
+        if (!permission.id || (permission.type !== 'anyone' && permission.type !== 'domain')) continue
+        await drive.permissions.delete({ fileId, permissionId: permission.id })
+        revoked += 1
+      }
+    } catch (error) {
+      failed += 1
+      console.error('Failed to revoke public Google Drive permission:', { fileId, message: error instanceof Error ? error.message : 'Unknown error' })
+    }
+  }
+  return { revoked, failed }
 }
 
 type DriveFileMetadata = {
@@ -121,6 +143,7 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
   ]
 
   const driveFiles: DriveFileMetadata[] = []
+  const sharedFileIds: string[] = []
   let pageToken: string | undefined
 
   const parentsQuery = parentIds.map((id) => `'${id}' in parents`).join(' or ')
@@ -130,12 +153,13 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
     const response = await drive.files.list({
       q,
       spaces: 'drive',
-      fields: 'nextPageToken,files(id,name,mimeType,size,parents)',
+      fields: 'nextPageToken,files(id,name,mimeType,size,parents,shared)',
       pageSize: 1000,
       pageToken,
     })
     for (const file of response.data.files ?? []) {
       if (!file.id || !file.name || !file.mimeType) continue
+      if (file.shared) sharedFileIds.push(file.id)
       const parentId = file.parents?.[0] ?? appFolderId
       driveFiles.push({ id: file.id, name: file.name, mimeType: file.mimeType, sizeBytes: BigInt(file.size ?? 0), parentId })
     }
@@ -178,6 +202,9 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
     deleted = result.count
   }
 
+  // Folders are checked too: a public folder link would expose every file inside it.
+  const revokeResult = await revokePublicPermissions(drive, [...parentIds, ...sharedFileIds])
+
   await syncGoogleQuota(account.id).catch(() => undefined)
-  return { accountId: account.id, created, updated, deleted }
+  return { accountId: account.id, created, updated, deleted, publicLinksRevoked: revokeResult.revoked, publicLinksRevokeFailed: revokeResult.failed }
 }

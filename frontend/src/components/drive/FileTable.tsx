@@ -100,13 +100,9 @@ export function FileTable({ files, mode = 'default', selectedFileIds = new Set<s
                           event.stopPropagation()
                           try {
                             const data = await apiFetch<{ url: string | null }>(`/files/${file.id}/view-url`)
+                            // Private Drive link only; public share links are disabled.
                             if (data.url) {
                               await navigator.clipboard.writeText(data.url)
-                              setCopiedFileId(file.id ?? null)
-                              setTimeout(() => setCopiedFileId(null), 2000)
-                            } else {
-                              const shareData = await apiFetch<{ url: string }>(`/files/${file.id}/share`, { method: 'POST' })
-                              await navigator.clipboard.writeText(shareData.url)
                               setCopiedFileId(file.id ?? null)
                               setTimeout(() => setCopiedFileId(null), 2000)
                             }

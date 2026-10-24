@@ -28,6 +28,8 @@ if [ ! -f "$backend_dir/.env" ]; then
   {
     printf 'DATABASE_URL="%s"\n' "$database_url"
     printf 'APP_PORT=4000\n'
+    printf 'HOST=127.0.0.1\n'
+    printf 'OWNER_EMAIL=""\n'
     printf 'FRONTEND_URL="http://localhost:5173"\n'
     printf 'JWT_ACCESS_SECRET="%s"\n' "$(random_key)"
     printf 'TOKEN_ENCRYPTION_KEY="%s"\n' "$(random_key)"

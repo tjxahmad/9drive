@@ -19,6 +19,13 @@ import { systemRouter } from './modules/system/system.routes.js'
 export const app = express()
 app.set('trust proxy', true)
 
+app.disable('x-powered-by')
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  // Keeps short-lived preview token URLs from leaking to other sites via the Referer header.
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  next()
+})
 app.use(cors({ origin: env.FRONTEND_URL }))
 app.use(express.json({ limit: '1mb' }))
 

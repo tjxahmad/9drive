@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Archive, CheckCircle, ClipboardPaste, Download, FolderInput, FolderPlus, LayoutGrid, List, RefreshCw, Star, Trash2, Upload, X } from 'lucide-react'
+import { Archive, ClipboardPaste, Download, FolderInput, FolderPlus, LayoutGrid, List, RefreshCw, Star, Trash2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { DummyModal } from '@/components/drive/DummyModal'
@@ -17,7 +17,7 @@ import { Input } from '@/components/ui/input'
 import { API_URL, apiFetch, formatBytes, formatDate } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
 import { createPlyr, ensurePlyr } from '@/lib/plyr'
-import { getPreviewKind, officeViewerUrl } from '@/lib/preview'
+import { drivePreviewUrl, getPreviewKind } from '@/lib/preview'
 import type { FileItem, FolderItem } from '@/data/drive-data'
 import { useUpload } from '@/context/UploadContext'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
@@ -88,9 +88,6 @@ export function AllFilesPage() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [detailOpen, setDetailOpen] = useState(false)
-  const [shareOpen, setShareOpen] = useState(false)
-  const [shareUrl, setShareUrl] = useState('')
-  const [copiedShareLink, setCopiedShareLink] = useState(false)
   const [previewUrl, setPreviewUrl] = useState('')
   const [previewError, setPreviewError] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -115,8 +112,6 @@ export function AllFilesPage() {
   const [folderContextMenu, setFolderContextMenu] = useState<{ x: number; y: number; folder: FolderItem | null }>({ x: 0, y: 0, folder: null })
   const [emptyContextMenu, setEmptyContextMenu] = useState<{ x: number; y: number; open: boolean }>({ x: 0, y: 0, open: false })
   const [message, setMessage] = useState('')
-  const [gdrivePublicUrl, setGdrivePublicUrl] = useState('')
-  const [makingPublic, setMakingPublic] = useState(false)
   const [loading, setLoading] = useState(false)
   const [syncingDrive, setSyncingDrive] = useState(false)
   const [fileViewMode, setFileViewMode] = useState<FileViewMode>(getStoredFileViewMode)
@@ -410,6 +405,13 @@ export function AllFilesPage() {
     setPreviewOpen(true)
     setContextMenu({ x: 0, y: 0, file: null })
     try {
+      if (getPreviewKind(activeFile.mimeType) === 'office') {
+        // Office files open in Google Drive's own viewer: private to the owning Google account, not sent to any other site.
+        const viewData = await apiFetch<{ url: string | null }>(`/files/${activeFile.id}/view-url`)
+        if (!viewData.url) throw new Error('Preview is not available for this file. Download it to open.')
+        setPreviewUrl(drivePreviewUrl(viewData.url, activeFile.accountEmail))
+        return
+      }
       const data = await apiFetch<{ path?: string; url: string }>(`/files/${activeFile.id}/preview-token`, { method: 'POST' })
       const previewPath = data.path ?? new URL(data.url).pathname
       setPreviewUrl(`${API_URL}${previewPath}`)
@@ -497,14 +499,10 @@ export function AllFilesPage() {
     window.dispatchEvent(new Event('9drive:storage-changed'))
   }
 
-  async function shareFile() {
-    if (!activeFile?.id) return
-    const data = await apiFetch<{ url: string }>(`/files/${activeFile.id}/share`, { method: 'POST' })
-    setShareUrl(data.url)
-    setCopiedShareLink(false)
-    setGdrivePublicUrl('')
-    setMakingPublic(false)
-    setShareOpen(true)
+  // Public share links are disabled: only the owner can read or write files.
+  function shareFile() {
+    setMessage('Public share links are disabled. Only you can access your files.')
+    setTimeout(() => setMessage(''), 2500)
     setContextMenu({ x: 0, y: 0, file: null })
   }
 
@@ -514,12 +512,10 @@ export function AllFilesPage() {
       const data = await apiFetch<{ url: string | null }>(`/files/${activeFile.id}/view-url`)
       if (data.url) {
         await navigator.clipboard.writeText(data.url)
-        setMessage('Google Drive link copied to clipboard!')
+        setMessage('Private Google Drive link copied (opens only for your Google account).')
         setTimeout(() => setMessage(''), 2500)
       } else {
-        const shareData = await apiFetch<{ url: string }>(`/files/${activeFile.id}/share`, { method: 'POST' })
-        await navigator.clipboard.writeText(shareData.url)
-        setMessage('Share link copied to clipboard!')
+        setMessage('No private link is available for this file.')
         setTimeout(() => setMessage(''), 2500)
       }
     } catch (err: any) {
@@ -573,12 +569,6 @@ export function AllFilesPage() {
     } finally {
       setInviting(false)
     }
-  }
-
-  async function copyShareLink() {
-    await navigator.clipboard.writeText(shareUrl)
-    setCopiedShareLink(true)
-    window.setTimeout(() => setCopiedShareLink(false), 1600)
   }
 
   async function renameFolder(event: FormEvent) {
@@ -773,57 +763,8 @@ export function AllFilesPage() {
       <DummyModal open={renameOpen} title="Rename File" description={activeFile?.name ?? ''} onClose={() => setRenameOpen(false)}><form onSubmit={renameFile} className="grid gap-4"><Input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} required /><div className="flex justify-end gap-3"><Button type="button" variant="outline" onClick={() => setRenameOpen(false)}>Cancel</Button><Button>Rename</Button></div></form></DummyModal>
       <DummyModal open={moveOpen} title="Move to Folder" description={selectedFileIds.size > 0 ? `Move ${selectedFileIds.size} files` : activeFile?.name ?? ''} onClose={() => setMoveOpen(false)}><form onSubmit={moveFile} className="grid gap-4"><select className="h-11 rounded-xl border border-slate-200 px-3 text-sm" value={selectedFolderId} onChange={(event) => setSelectedFolderId(event.target.value)}><option value="">No folder</option>{allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select><div className="flex justify-end gap-3"><Button type="button" variant="outline" onClick={() => setMoveOpen(false)}>Cancel</Button><Button>Move</Button></div></form></DummyModal>
       <DummyModal open={deleteOpen} title={selectedFileIds.size > 0 ? 'Delete Files' : 'Delete File'} description={selectedFileIds.size > 0 ? `Delete ${selectedFileIds.size} files from Google Drive?` : `Delete ${activeFile?.name ?? 'file'} from Google Drive?`} onClose={() => setDeleteOpen(false)}><div className="flex justify-end gap-3"><Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="danger" onClick={deleteFile}>Delete</Button></div></DummyModal>
-      <DummyModal open={shareOpen} title="Share Link" description={activeFile?.name ?? ''} onClose={() => setShareOpen(false)}>
-        <div className="grid gap-4">
-          <div>
-            <label className="text-xs font-bold text-slate-500 block mb-1">9Drive Public Share Link (No GDrive login required)</label>
-            <Input value={shareUrl} readOnly />
-          </div>
-          <div className="flex justify-end gap-3">
-            <Button variant="outline" onClick={() => setShareOpen(false)}>Close</Button>
-            <Button onClick={copyShareLink}>{copiedShareLink ? <CheckCircle className="h-4 w-4" /> : null}{copiedShareLink ? 'Copied!' : 'Copy Link'}</Button>
-          </div>
-          {copiedShareLink ? <p className="rounded-xl bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">Share link copied to clipboard.</p> : null}
-
-          {activeFile?.accountProvider === 'google_drive' && (
-            <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 grid gap-3">
-              <div>
-                <label className="text-xs font-bold text-slate-500 block mb-1">Google Drive Direct Link (Public Access)</label>
-                <p className="text-xs text-slate-500 mb-2">Configure this file to be publicly accessible on Google Drive so external tools can edit/download it.</p>
-              </div>
-              {gdrivePublicUrl ? (
-                <div className="grid gap-2">
-                  <Input value={gdrivePublicUrl} readOnly />
-                  <p className="rounded-xl bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">Google Drive public link generated and copied to clipboard!</p>
-                </div>
-              ) : (
-                <Button
-                  variant="outline"
-                  disabled={makingPublic}
-                  onClick={async () => {
-                    if (!activeFile?.id) return
-                    setMakingPublic(true)
-                    try {
-                      const res = await apiFetch<{ url: string }>('/files/' + activeFile.id + '/public-permission', { method: 'POST' })
-                      setGdrivePublicUrl(res.url)
-                      await navigator.clipboard.writeText(res.url)
-                    } catch (err: any) {
-                      alert('Failed to update Google Drive permission: ' + (err.message || err))
-                    } finally {
-                      setMakingPublic(false)
-                    }
-                  }}
-                  className="w-full text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 dark:text-blue-400 dark:bg-blue-950/30 dark:border-blue-900/50"
-                >
-                  {makingPublic ? 'Making Public...' : 'Make Public & Copy GDrive Link'}
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-      </DummyModal>
       <DummyModal open={folderRenameOpen} title="Rename Folder" description={activeFolderForMenu?.name ?? ''} onClose={() => setFolderRenameOpen(false)}><form onSubmit={renameFolder} className="grid gap-4"><Input value={folderRenameValue} onChange={(event) => setFolderRenameValue(event.target.value)} required /><FolderAppearanceFields color={folderRenameColor} iconUrl={folderRenameIconUrl} onColorChange={setFolderRenameColor} onIconChange={setFolderRenameIconUrl} /><div className="flex justify-end gap-3"><Button type="button" variant="outline" onClick={() => setFolderRenameOpen(false)}>Cancel</Button><Button>Rename</Button></div></form></DummyModal>
-      <DummyModal open={folderDeleteOpen} title="Delete Folder" description={`Delete virtual folder ${activeFolderForMenu?.name ?? ''}? Files inside will remain uploaded.`} onClose={() => setFolderDeleteOpen(false)}><div className="flex justify-end gap-3"><Button variant="outline" onClick={() => setFolderDeleteOpen(false)}>Cancel</Button><Button variant="danger" onClick={deleteFolder}>Delete</Button></div></DummyModal>
+      <DummyModal open={folderDeleteOpen} title="Delete Folder" description={`Delete virtual folder ${activeFolderForMenu?.name ?? ''}? Files inside will be moved to Google Drive trash.`} onClose={() => setFolderDeleteOpen(false)}><div className="flex justify-end gap-3"><Button variant="outline" onClick={() => setFolderDeleteOpen(false)}>Cancel</Button><Button variant="danger" onClick={deleteFolder}>Delete</Button></div></DummyModal>
       <DummyModal open={inviteOpen} title="Invite Member" description={`Share ${inviteTargetType === 'file' ? (activeFile?.name ?? 'file') : (activeFolderForMenu?.name ?? 'folder')} with a team member.`} onClose={() => setInviteOpen(false)}>
         <form onSubmit={sendInvite} className="grid gap-4">
           <label className="grid gap-2 text-sm font-semibold">Email Address<Input type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="member@example.com" required /></label>
@@ -839,7 +780,7 @@ export function AllFilesPage() {
           {!previewLoading && !previewError && activePreviewKind === 'image' && previewUrl ? <img src={previewUrl} alt={activeFile?.name ?? 'File preview'} className="max-h-full max-w-full object-contain" onError={() => setPreviewError('Failed to load preview.')} /> : null}
           {!previewLoading && !previewError && activePreviewKind === 'video' && previewUrl ? <div className="shared-video-shell"><video ref={previewVideoRef} controls playsInline preload="metadata" onError={() => setPreviewError('Failed to load preview.')}><source src={previewUrl} type={activeFile?.mimeType} /></video></div> : null}
           {!previewLoading && !previewError && activePreviewKind === 'document' && previewUrl ? <iframe src={previewUrl} title={activeFile?.name ?? 'File preview'} className="h-full w-full border-0 bg-white" /> : null}
-          {!previewLoading && !previewError && activePreviewKind === 'office' && previewUrl ? <iframe src={officeViewerUrl(previewUrl)} title={activeFile?.name ?? 'File preview'} className="h-full w-full border-0 bg-white" /> : null}
+          {!previewLoading && !previewError && activePreviewKind === 'office' && previewUrl ? <div className="flex h-full w-full flex-col"><iframe src={previewUrl} title={activeFile?.name ?? 'File preview'} className="w-full flex-1 border-0 bg-white" /><a href={previewUrl.replace('/preview', '/view')} target="_blank" rel="noopener noreferrer" className="p-2 text-center text-xs font-semibold text-blue-600 hover:underline">Preview blank? Open in Google Drive</a></div> : null}
           {!previewLoading && !previewError && !activePreviewKind ? <div className="p-6 text-center text-sm text-slate-500">Preview not available for this file type. Use Download instead.</div> : null}
         </div>
       </DummyModal>

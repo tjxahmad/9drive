@@ -14,6 +14,10 @@ export function ensurePlyr() {
       const link = document.createElement('link')
       link.rel = 'stylesheet'
       link.href = 'https://cdnjs.cloudflare.com/ajax/libs/plyr/3.7.8/plyr.css'
+      // Subresource Integrity: the browser refuses the file if the CDN copy was tampered with.
+      link.integrity = 'sha512-yexU9hwne3MaLL2PG+YJDhaySS9NWcj6z7MvUDSoMhwNghPgXgcvYgVhfj4FMYpPh1Of7bt8/RK5A0rQ9fPMOw=='
+      link.crossOrigin = 'anonymous'
+      link.referrerPolicy = 'no-referrer'
       link.dataset.plyr = 'true'
       document.head.appendChild(link)
     }
@@ -27,6 +31,9 @@ export function ensurePlyr() {
 
     const script = document.createElement('script')
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/plyr/3.7.8/plyr.min.js'
+    script.integrity = 'sha512-vONptKEoKbP1gaC5UkbYDa9OPr04ur4bxaaqT7DAJxGHB2oogtseCPrl5e5hPFokGYotlGNV4d+GM593ka7iNA=='
+    script.crossOrigin = 'anonymous'
+    script.referrerPolicy = 'no-referrer'
     script.async = true
     script.dataset.plyr = 'true'
     script.onload = () => resolve()

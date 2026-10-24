@@ -7,9 +7,9 @@ export type AccessTokenPayload = {
 }
 
 export function signAccessToken(payload: AccessTokenPayload) {
-  return jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: env.ACCESS_TOKEN_TTL_SECONDS })
+  return jwt.sign(payload, env.JWT_ACCESS_SECRET, { algorithm: 'HS256', expiresIn: env.ACCESS_TOKEN_TTL_SECONDS })
 }
 
 export function verifyAccessToken(token: string) {
-  return jwt.verify(token, env.JWT_ACCESS_SECRET) as AccessTokenPayload
+  return jwt.verify(token, env.JWT_ACCESS_SECRET, { algorithms: ['HS256'] }) as AccessTokenPayload
 }

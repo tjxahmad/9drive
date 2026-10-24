@@ -7,6 +7,8 @@ import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.
 import { hashPassword, verifyPassword } from '../../utils/password.js'
 import { encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { signAccessToken } from '../../utils/jwt.js'
+import { createOwnerUser, findOrCreateOwnerForGoogle, isOwner } from '../../utils/owner.js'
+import { isRateLimited } from '../../utils/rate-limit.js'
 import { createOAuthClient, syncGoogleQuota } from '../google/google.service.js'
 
 export const authRouter = Router()
@@ -40,13 +42,21 @@ async function verifyCaptcha(token: string | undefined) {
   return Boolean(data.success)
 }
 
+function clientKey(req: AuthRequest) {
+  // Use the real TCP peer address; X-Forwarded-For can be forged by the client.
+  return req.socket.remoteAddress ?? 'unknown'
+}
+
 authRouter.post('/register', async (req, res, next) => {
   try {
+    if (isRateLimited(`register:${clientKey(req)}`, 5, 60 * 60_000)) return res.status(429).json({ code: 'AUTH_RATE_LIMITED', message: 'Too many attempts. Try again later.' })
     const body = registerSchema.parse(req.body)
     if (!(await verifyCaptcha(body.captchaToken))) return res.status(400).json({ code: 'CAPTCHA_FAILED', message: 'Captcha verification failed.' })
     const existing = await prisma.user.findUnique({ where: { email: body.email } })
     if (existing) return res.status(409).json({ code: 'AUTH_EMAIL_TAKEN', message: 'Email already registered.' })
-    const user = await prisma.user.create({ data: { name: body.name, email: body.email, passwordHash: await hashPassword(body.password) } })
+    // Single-owner mode: only the owner account can ever be created.
+    const user = await createOwnerUser({ name: body.name, email: body.email, passwordHash: await hashPassword(body.password) })
+    if (!user) return res.status(403).json({ code: 'REGISTRATION_CLOSED', message: 'Registration is closed. This 9Drive has an owner already.' })
     const tokens = await createSession(user.id, req)
     return res.status(201).json({ ...tokens, user: { id: user.id, name: user.name, email: user.email } })
   } catch (error) {
@@ -56,9 +66,11 @@ authRouter.post('/register', async (req, res, next) => {
 
 authRouter.post('/login', async (req, res, next) => {
   try {
+    if (isRateLimited(`login:${clientKey(req)}`, 10, 15 * 60_000)) return res.status(429).json({ code: 'AUTH_RATE_LIMITED', message: 'Too many login attempts. Try again in 15 minutes.' })
     const body = loginSchema.parse(req.body)
     const user = await prisma.user.findUnique({ where: { email: body.email } })
     if (!user || !(await verifyPassword(user.passwordHash, body.password))) return res.status(401).json({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid email or password.' })
+    if (!(await isOwner(user))) return res.status(403).json({ code: 'AUTH_NOT_OWNER', message: 'Only the owner can use this 9Drive.' })
     const tokens = await createSession(user.id, req)
     return res.json({ ...tokens, user: { id: user.id, name: user.name, email: user.email } })
   } catch (error) {
@@ -101,14 +113,11 @@ authRouter.get('/google/callback', async (req, res) => {
     const profile = await oauth2.userinfo.get()
     const providerAccountId = profile.data.id
     const email = profile.data.email
-    if (!providerAccountId || !email) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
+    if (!providerAccountId || !email || profile.data.verified_email !== true) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
 
     const name = profile.data.name || email.split('@')[0] || 'Google User'
-    const user = await prisma.user.upsert({
-      where: { email },
-      create: { email, name, passwordHash: await hashPassword(randomToken(32)) },
-      update: { name },
-    })
+    const user = await findOrCreateOwnerForGoogle(email, name)
+    if (!user) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
     const existingAccount = await prisma.connectedAccount.findUnique({ where: { userId_provider_providerAccountId: { userId: user.id, provider: 'google_drive', providerAccountId } } })
     const refreshTokenEncrypted = tokens.refresh_token ? encryptText(tokens.refresh_token) : existingAccount?.refreshTokenEncrypted
     if (!refreshTokenEncrypted) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
@@ -149,7 +158,7 @@ authRouter.get('/google/callback', async (req, res) => {
     await prisma.authHandoff.create({ data: { userId: user.id, tokenHash: hashToken(handoffToken), expiresAt: new Date(Date.now() + 5 * 60_000) } })
     return res.redirect(`${env.FRONTEND_URL}/google-auth?token=${handoffToken}`)
   } catch (error) {
-    console.error('Google Auth callback failed:', error)
+    console.error('Google Auth callback failed:', error instanceof Error ? error.message : error)
     return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
   }
 })
@@ -159,7 +168,9 @@ authRouter.post('/google/exchange', async (req, res, next) => {
     const body = googleExchangeSchema.parse(req.body)
     const handoff = await prisma.authHandoff.findFirst({ where: { tokenHash: hashToken(body.token), usedAt: null, expiresAt: { gt: new Date() } }, include: { user: true } })
     if (!handoff) return res.status(401).json({ code: 'AUTH_GOOGLE_HANDOFF_INVALID', message: 'Google login session expired.' })
-    await prisma.authHandoff.update({ where: { id: handoff.id }, data: { usedAt: new Date() } })
+    // Mark used atomically so the one-time token cannot be exchanged twice in parallel.
+    const claimed = await prisma.authHandoff.updateMany({ where: { id: handoff.id, usedAt: null }, data: { usedAt: new Date() } })
+    if (claimed.count !== 1) return res.status(401).json({ code: 'AUTH_GOOGLE_HANDOFF_INVALID', message: 'Google login session expired.' })
     const tokens = await createSession(handoff.userId, req)
     return res.json({ ...tokens, user: { id: handoff.user.id, name: handoff.user.name, email: handoff.user.email } })
   } catch (error) {

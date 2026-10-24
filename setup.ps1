@@ -35,6 +35,8 @@ if (-not (Test-Path -LiteralPath $backendEnv)) {
     @(
         "DATABASE_URL=`"$databaseUrl`""
         "APP_PORT=4000"
+        "HOST=127.0.0.1"
+        "OWNER_EMAIL=`"`""
         "FRONTEND_URL=`"http://localhost:5173`""
         "JWT_ACCESS_SECRET=`"$(New-RandomHexKey)`""
         "TOKEN_ENCRYPTION_KEY=`"$(New-RandomHexKey)`""

@@ -231,6 +231,22 @@ div.border.border-slate-200,
   transform: translateY(-2px);
 }
 
+/* Crimson login screen: scoped theme variables so the global glass rules render red/black in both themes. */
+.auth-crimson {
+  --text-primary: #f5e9ea;
+  --text-secondary: #d8bfc2;
+  --text-bold: #ffffff;
+  --input-bg: rgba(255, 255, 255, 0.05);
+  --input-border: rgba(255, 255, 255, 0.15);
+  --input-focus-bg: rgba(255, 255, 255, 0.09);
+  --active-nav-border: #ef4444;
+  color-scheme: dark;
+}
+
+.auth-crimson input:not([type="checkbox"]):not([type="radio"]):focus {
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.3) !important;
+}
+
 /* Inputs and Select Boxes */
 input:not([type="checkbox"]):not([type="radio"]), select, textarea {
   background: var(--input-bg) !important;

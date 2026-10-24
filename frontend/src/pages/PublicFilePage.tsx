@@ -4,7 +4,7 @@ import { Download, ExternalLink, FileArchive, FileText, ImageIcon, Play, Table2 
 import { Button } from '@/components/ui/button'
 import { API_URL, apiFetch, formatBytes, formatDate } from '@/lib/api'
 import { createPlyr, ensurePlyr } from '@/lib/plyr'
-import { getPreviewKind, isSpreadsheetMimeType, officeViewerUrl } from '@/lib/preview'
+import { getPreviewKind, isSpreadsheetMimeType } from '@/lib/preview'
 
 type PublicFile = { name: string; mimeType: string; sizeBytes: string; createdAt: string }
 
@@ -95,8 +95,7 @@ export function PublicFilePage({ embed = false }: { embed?: boolean }) {
       {kind === 'image' ? <img src={previewUrl} alt={file.name} className="max-h-full max-w-full object-contain shadow-2xl shadow-black/30" /> : null}
       {kind === 'video' ? <div className="shared-video-shell"><video ref={videoRef} controls playsInline preload="metadata"><source src={previewUrl} type={file.mimeType} /></video></div> : null}
       {kind === 'document' ? <iframe src={previewUrl} title={file.name} className="h-full w-full border-0 bg-white" /> : null}
-      {kind === 'office' ? <iframe src={officeViewerUrl(previewUrl)} title={file.name} className="h-full w-full border-0 bg-white" /> : null}
-      {!kind ? <UnsupportedPreview file={file} downloadUrl={downloadUrl} /> : null}
+      {!kind || kind === 'office' ? <UnsupportedPreview file={file} downloadUrl={downloadUrl} /> : null}
     </div>
   )
 

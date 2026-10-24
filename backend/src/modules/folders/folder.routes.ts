@@ -72,11 +72,11 @@ async function ensureProviderFolderIds(
           folder.providerFolderId = gId
         }
       } catch (error) {
-        console.error(`Failed self-healing for folder ${folder.id}:`, error)
+        console.error(`Failed self-healing for folder ${folder.id}:`, error instanceof Error ? error.message : error)
       }
     }
   } catch (error) {
-    console.error('Failed self-healing Google Drive auth:', error)
+    console.error('Failed self-healing Google Drive auth:', error instanceof Error ? error.message : error)
   }
 }
 
@@ -146,7 +146,7 @@ folderRouter.post('/', async (req: AuthRequest, res, next) => {
         })
         providerFolderId = driveFolder.data.id ?? null
       } catch (error) {
-        console.error('Failed to create folder on Google Drive:', error)
+        console.error('Failed to create folder on Google Drive:', error instanceof Error ? error.message : error)
       }
     }
 
@@ -207,7 +207,7 @@ folderRouter.patch('/:id', async (req: AuthRequest, res, next) => {
           requestBody: { name: body.name }
         })
       } catch (error) {
-        console.error('Failed to rename folder on Google Drive:', error)
+        console.error('Failed to rename folder on Google Drive:', error instanceof Error ? error.message : error)
       }
     }
 
@@ -235,7 +235,7 @@ folderRouter.patch('/:id', async (req: AuthRequest, res, next) => {
           fields: 'id, parents'
         })
       } catch (error) {
-        console.error('Failed to move folder on Google Drive:', error)
+        console.error('Failed to move folder on Google Drive:', error instanceof Error ? error.message : error)
       }
     }
 
@@ -278,7 +278,8 @@ folderRouter.delete('/:id', async (req: AuthRequest, res, next) => {
       try {
         const auth = await getAuthedGoogleClient(file.connectedAccount)
         const drive = google.drive({ version: 'v3', auth })
-        await drive.files.delete({ fileId: file.providerFileId })
+        // Move to Google Drive trash (recoverable for 30 days) instead of deleting permanently.
+        await drive.files.update({ fileId: file.providerFileId, requestBody: { trashed: true } })
         syncedAccountIds.add(file.connectedAccountId)
       } catch {
         // Keep going so one failure does not block the whole deletion
@@ -292,7 +293,7 @@ folderRouter.delete('/:id', async (req: AuthRequest, res, next) => {
         try {
           const auth = await getAuthedGoogleClient(f.connectedAccount)
           const drive = google.drive({ version: 'v3', auth })
-          await drive.files.delete({ fileId: f.providerFolderId })
+          await drive.files.update({ fileId: f.providerFolderId, requestBody: { trashed: true } })
           if (f.connectedAccountId) syncedAccountIds.add(f.connectedAccountId)
         } catch {
           // ignore
